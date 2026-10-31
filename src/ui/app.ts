@@ -135,12 +135,15 @@ export function mount(
     const cloudError = gate.mode === 'cloud' ? cloudStore?.readError() : null;
     const notReady = cloudError === CLOUD_NOT_READY;
     const bits = notReady
-      ? [CLOUD_NOT_READY]
+      ? []
       : [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(Boolean);
     banner.replaceChildren();
-    const line = document.createElement('span');
-    line.textContent = bits.join(' / ');
-    banner.append(line);
+    banner.hidden = notReady;
+    if (!notReady) {
+      const line = document.createElement('span');
+      line.textContent = bits.join(' / ');
+      banner.append(line);
+    }
     if (store.exportBroken()) {
       const recover = document.createElement('button');
       recover.type = 'button';
@@ -150,10 +153,11 @@ export function mount(
     }
     banner.classList.toggle(
       'is-warn',
-      notice.warn || Boolean(state.saveError) || Boolean(state.loadError),
+      !notReady && (notice.warn || Boolean(state.saveError) || Boolean(state.loadError)),
     );
     const total = listedItems().length;
     const filtered = items.length !== total;
+    count.hidden = notReady;
     count.textContent = notReady ? '' : filtered ? `${items.length} / ${total}枚` : `${total}枚`;
     board.replaceChildren();
     if (notReady) {
