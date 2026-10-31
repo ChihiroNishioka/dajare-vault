@@ -1,4 +1,5 @@
 import { v1ToV2 } from './v1-to-v2';
+import { v2ToV3 } from './v2-to-v3';
 
 export interface SchemaFile {
   schemaVersion: number;
@@ -10,6 +11,7 @@ export type Migration = (data: SchemaFile) => SchemaFile;
 /** キーは「移行前」の版。1 を渡すと v2 になる。 */
 export const migrations: Record<number, Migration> = {
   1: v1ToV2,
+  2: v2ToV3,
 };
 
 export function applyMigrations(

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --exclude tests/**/*.emulator.test.ts",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-dajare \"vitest run --maxWorkers=1 tests/rules.emulator.test.ts\"",
     "test:e2e": "playwright test --project=pc-chromium --project=iphone-webkit",
     "screenshots": "playwright test --project=screenshots-pc --project=screenshots-iphone",
     "lint": "eslint . && prettier --check .",
@@ -17,9 +18,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@playwright/test": "^1.56.1",
     "@types/node": "^24.9.1",
     "eslint": "^9.39.1",
+    "firebase-tools": "^15.34.2",
     "globals": "^16.4.0",
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
@@ -27,5 +30,8 @@
     "typescript-eslint": "^8.46.2",
     "vite": "^7.1.12",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "firebase": "^12.19.0"
   }
 }

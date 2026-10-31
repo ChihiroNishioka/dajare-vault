@@ -185,7 +185,7 @@ describe('seed file', () => {
       readFileSync(new URL('../src/data/seed.json', import.meta.url), 'utf8'),
     );
     expect(seed).toEqual(built.file);
-    expect(seed.schemaVersion).toBe(2);
+    expect(seed.schemaVersion).toBe(3);
     expect(seed.items).toHaveLength(classicItems().length + 113);
     expect(seed.items.slice(0, 6).map((item: { text: string }) => item.text)).toEqual(
       classicItems().map((item) => item.text),

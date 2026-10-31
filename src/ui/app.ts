@@ -1,18 +1,49 @@
 import { backupNotice } from '../domain/backup';
 import {
   exportFilename,
+  hasOwnDeviceData,
+  parseVault,
+  planDeviceUpload,
+  planImport,
+  prepareImportCommit,
   serialize,
+  shouldMarkUploaded,
   type ImportDecisions,
   type ImportPlan,
 } from '../domain/transfer';
-import { LIMITS, READING_RE } from '../domain/validate';
+import { codePointLength, LIMITS, READING_RE } from '../domain/validate';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
+import type { DajareStore } from '../store/dajare-store';
+import { adaptLocalStore } from '../store/local-dajare-store';
 import { createStore, type Store } from '../store/store';
+import { SEED_IDS } from '../data/seed-ids';
+import seedFile from '../data/seed.json';
 import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
+import { commitCloud } from '../cloud/commit-cloud';
+import { loginFailureMessage } from '../cloud/google-identity';
+import { CLOUD_NOT_READY } from '../cloud/messages';
+import {
+  nameRefreshButtonLabel,
+  nameRefreshProgress,
+  nameRefreshResultMessage,
+  nameRefreshTargets,
+} from '../cloud/refresh-names';
+import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
+import { readHeaderMock, readPreviewActor } from '../session';
+import type { Actor } from '../types';
 import { defineCard, type DajareCard } from './card';
+import { endSave, tryBeginSave } from './save-lock';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
-import { deletePanel, formPanel, importPanel, promptPanel, settingsPanel } from './panel';
+import {
+  confirmUploadPanel,
+  deletePanel,
+  formPanel,
+  changedAfterConfirmPanel,
+  importPanel,
+  promptPanel,
+  settingsPanel,
+} from './panel';
 import { defineStars } from './stars';
 
 defineCard();
@@ -24,6 +55,7 @@ type Panel =
   | { kind: 'settings' }
   | { kind: 'import'; plan: ImportPlan; incoming: Dajare[] }
   | { kind: 'delete'; id: string }
+  | { kind: 'upload-local'; sendIds: string[] }
   | { kind: 'prompt' };
 
 const ui = {
@@ -37,8 +69,44 @@ const ui = {
 };
 
 let toastTimer = 0;
+const saveLock = { held: false };
 
-export function mount(root: HTMLElement, store: Store = createStore(window.localStorage)): void {
+const LOCAL_UPLOAD_KEY = 'dajareVault:uploadedLocal';
+
+export function mount(
+  root: HTMLElement,
+  store: Store = createStore(window.localStorage, {
+    seedOnEmpty: !isFirebaseConfigured(firebaseConfig),
+  }),
+): void {
+  // 本番の共有ビルドでは右辺ごと消える。見本は Firestore に繋がない。
+  const headerChrome =
+    import.meta.env.PROD && import.meta.env.VITE_FORCE_LOCAL !== '1'
+      ? null
+      : readHeaderMock(window.location.search);
+  const preview = isFirebaseConfigured(firebaseConfig)
+    ? null
+    : readPreviewActor(window.localStorage);
+  const gate: { mode: 'local' | 'cloud'; user: Actor | null; isEditor: boolean } = {
+    mode: 'local',
+    user: preview,
+    isEditor: true,
+  };
+  const canEdit = (): boolean => {
+    if (headerChrome?.kind === 'signed-out') return false;
+    if (headerChrome?.kind === 'signed-in') return headerChrome.editor;
+    if (cloudStore?.readError() === CLOUD_NOT_READY) return false;
+    return gate.mode === 'local' || gate.isEditor;
+  };
+  let cloudStore: DajareStore | null = null;
+  let cloudSignIn: (() => Promise<void>) | null = null;
+  let renderGoogleButton:
+    ((container: HTMLElement, onStatus: (code: string) => void) => void) | null = null;
+  let cloudSignOut: (() => Promise<void>) | null = null;
+  let cloudBootError: string | null = null;
+  let nameRefresh: { done: number; total: number } | null = null;
+  const localApi = adaptLocalStore(store);
+  const active = (): DajareStore => (gate.mode === 'cloud' && cloudStore ? cloudStore : localApi);
   root.innerHTML = shell();
   const shellEl = root.querySelector<HTMLElement>('.app');
   const panel = root.querySelector<HTMLElement>('#panel');
@@ -73,7 +141,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
 
   const renderResults = (): void => {
     const state = store.getState();
-    const items = queryItems(state.items, {
+    const items = queryItems(listedItems(), {
       q: ui.q,
       scene: ui.scene,
       tags: ui.tags,
@@ -85,11 +153,18 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       sort: ui.sort,
     });
     const notice = backupNotice(state.meta, new Date());
-    const bits = [notice.text, state.loadError, state.saveError].filter(Boolean);
+    const cloudError = gate.mode === 'cloud' ? cloudStore?.readError() : null;
+    const notReady = cloudError === CLOUD_NOT_READY;
+    const bits = notReady
+      ? []
+      : [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(Boolean);
     banner.replaceChildren();
-    const line = document.createElement('span');
-    line.textContent = bits.join(' / ');
-    banner.append(line);
+    banner.hidden = notReady;
+    if (!notReady) {
+      const line = document.createElement('span');
+      line.textContent = bits.join(' / ');
+      banner.append(line);
+    }
     if (store.exportBroken()) {
       const recover = document.createElement('button');
       recover.type = 'button';
@@ -99,13 +174,21 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     }
     banner.classList.toggle(
       'is-warn',
-      notice.warn || Boolean(state.saveError) || Boolean(state.loadError),
+      !notReady && (notice.warn || Boolean(state.saveError) || Boolean(state.loadError)),
     );
-    const filtered = items.length !== state.items.length;
-    count.textContent = filtered
-      ? `${items.length} / ${state.items.length}枚`
-      : `${state.items.length}枚`;
+    const total = listedItems().length;
+    const filtered = items.length !== total;
+    count.hidden = notReady;
+    count.textContent = notReady ? '' : filtered ? `${items.length} / ${total}枚` : `${total}枚`;
     board.replaceChildren();
+    if (notReady) {
+      const waiting = document.createElement('p');
+      waiting.className = 'empty-note';
+      waiting.textContent = CLOUD_NOT_READY;
+      board.append(waiting);
+      syncAccount();
+      return;
+    }
     if (items.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'empty-note';
@@ -116,6 +199,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     for (const item of items) {
       const card = document.createElement('dajare-card') as DajareCard;
       card.item = item;
+      card.editable = canEdit();
       board.append(card);
     }
   };
@@ -123,7 +207,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   const renderChoices = (): void => {
     const tags = new Set<string>(SUGGESTED_TAGS);
     const speakers = new Set<string>(SUGGESTED_SPEAKERS);
-    for (const item of store.getState().items) {
+    for (const item of listedItems()) {
       item.tags.forEach((tag) => tags.add(tag));
       item.speakers.forEach((name) => speakers.add(name));
     }
@@ -141,7 +225,45 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       .join('');
   };
 
+  const syncAccount = (): void => {
+    const slot = root.querySelector('#account');
+    if (!slot) return;
+    root.querySelectorAll<HTMLElement>('[data-action="add"]').forEach((button) => {
+      button.hidden = !canEdit();
+    });
+    if (headerChrome?.kind === 'signed-out') {
+      if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(true);
+      return;
+    }
+    if (headerChrome?.kind === 'signed-in') {
+      slot.innerHTML = signedInHtml(headerChrome.name, headerChrome.editor);
+      return;
+    }
+    if (gate.mode === 'local') {
+      slot.innerHTML = gate.user
+        ? `<div class="account-row"><b class="account-name" title="${escapeHtml(gate.user.name)}">${escapeHtml(gate.user.name)}</b><span class="mode-badge">見本のログイン</span></div>`
+        : `<div class="account-row"><span class="mode-badge">この端末だけ</span></div>`;
+      return;
+    }
+    if (!gate.user) {
+      if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(false);
+      const host = slot.querySelector<HTMLElement>('#gsi-button');
+      if (host && host.childElementCount === 0) {
+        renderGoogleButton?.(host, (code) => {
+          const note = slot.querySelector('#login-note');
+          if (note) note.textContent = loginFailureMessage(code);
+        });
+      }
+      return;
+    }
+    slot.innerHTML = signedInHtml(gate.user.name, gate.isEditor);
+  };
+
+  const listedItems = (): Dajare[] =>
+    gate.mode === 'cloud' ? (cloudStore ? cloudStore.getItems() : []) : store.getState().items;
+
   const syncChrome = (): void => {
+    syncAccount();
     filters.classList.toggle('is-open', ui.filtersOpen);
     const toggle = root.querySelector<HTMLButtonElement>('[data-action="toggle-filters"]');
     if (toggle) {
@@ -241,16 +363,31 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   };
 
   const saveForm = (): void => {
+    if (!tryBeginSave(saveLock)) return;
     const draft = readDraft();
-    if (!draft || ui.panel.kind !== 'form') return;
-    const result =
-      ui.panel.mode === 'edit' && ui.panel.id ? store.update(ui.panel.id, draft) : store.add(draft);
-    if (!result.ok) {
-      showFormErrors(result.errors);
+    if (!draft || ui.panel.kind !== 'form') {
+      endSave(saveLock);
       return;
     }
-    showToast(ui.panel.mode === 'edit' ? '書き直しました' : '紙を足しました');
-    afterWrite();
+    const saveButton = panel.querySelector<HTMLButtonElement>('[data-action="save"]');
+    if (saveButton) saveButton.disabled = true;
+    const editing = ui.panel.mode === 'edit' && ui.panel.id ? ui.panel.id : '';
+    const pending = editing
+      ? active().update(editing, draft, gate.user)
+      : active().create(draft, gate.user);
+    void pending
+      .then((result) => {
+        if (!result.ok) {
+          showFormErrors(
+            result.errors ?? [{ field: 'form', message: result.error ?? '保存できませんでした' }],
+          );
+          if (saveButton) saveButton.disabled = false;
+          return;
+        }
+        showToast(editing ? '書き直しました' : '紙を足しました');
+        afterWrite();
+      })
+      .finally(() => endSave(saveLock));
   };
 
   const download = (filename: string, contents: string): void => {
@@ -266,7 +403,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   };
 
   const doExport = (): void => {
-    const items = store.exportItems();
+    const items = gate.mode === 'cloud' && cloudStore ? cloudStore.getItems() : store.exportItems();
     const filename = exportFilename(new Date());
     download(filename, serialize(items));
     window.setTimeout(() => {
@@ -278,7 +415,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   };
 
   const doShare = async (): Promise<void> => {
-    const items = store.exportItems();
+    const items = gate.mode === 'cloud' && cloudStore ? cloudStore.getItems() : store.exportItems();
     const filename = exportFilename(new Date());
     const contents = serialize(items);
     const file = new File([contents], filename, { type: 'application/json' });
@@ -452,7 +589,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       } catch {
         canShare = false;
       }
-      panel.innerHTML = settingsPanel(store.getState().meta.promptOnChange, canShare);
+      panel.innerHTML = settingsPanel(store.getState().meta.promptOnChange, canShare, canEdit());
       openPanel();
       return;
     }
@@ -471,7 +608,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (action === 'edit') {
-      const item = store.getState().items.find((row) => row.id === actionEl.dataset.id);
+      const item = listedItems().find((row) => row.id === actionEl.dataset.id);
       if (!item) return;
       ui.draftTags = [...item.tags];
       ui.draftSpeakers = [...item.speakers];
@@ -484,21 +621,25 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     if (action === 'delete') {
       if (!actionEl.dataset.id) return;
       ui.panel = { kind: 'delete', id: actionEl.dataset.id };
-      const item = store.getState().items.find((row) => row.id === actionEl.dataset.id);
+      const item = listedItems().find((row) => row.id === actionEl.dataset.id);
       if (!item) return;
       panel.innerHTML = deletePanel(item);
       openPanel();
       return;
     }
     if (action === 'confirm-delete' && ui.panel.kind === 'delete') {
-      const removed = store.remove(ui.panel.id);
-      if (!removed) {
-        showToast(store.getState().saveError ?? '捨てられませんでした');
-        renderResults();
-        return;
-      }
-      showToast('捨てました');
-      afterWrite();
+      const id = ui.panel.id;
+      void active()
+        .remove(id)
+        .then((result) => {
+          if (!result.ok) {
+            showToast(result.error ?? '捨てられませんでした');
+            renderResults();
+            return;
+          }
+          showToast('捨てました');
+          afterWrite();
+        });
       return;
     }
     if (action === 'export-broken') {
@@ -523,6 +664,107 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       panel.querySelector<HTMLInputElement>('#import-file')?.click();
       return;
     }
+    if (action === 'sign-in') {
+      if (!cloudSignIn) {
+        showToast('共有の準備ができていません');
+        return;
+      }
+      void cloudSignIn().catch((error: unknown) => {
+        const code =
+          error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+        const message = loginFailureMessage(code);
+        const note = root.querySelector('#login-note');
+        if (note) note.textContent = message;
+        showToast(message);
+      });
+      return;
+    }
+    if (action === 'sign-out') {
+      void cloudSignOut?.();
+      return;
+    }
+    if (action === 'refresh-names' && cloudStore && gate.user && gate.isEditor && !nameRefresh) {
+      const person = gate.user;
+      const total = nameRefreshTargets(cloudStore.getItems(), person).length;
+      if (total === 0) return;
+      nameRefresh = { done: 0, total };
+      renderCloudNotes();
+      void cloudStore
+        .refreshOwnNames(person, (done, all) => {
+          nameRefresh = { done, total: all };
+          renderCloudNotes();
+        })
+        .then((result) => {
+          nameRefresh = null;
+          renderCloudNotes();
+          showToast(nameRefreshResultMessage(result));
+        });
+      return;
+    }
+    if (action === 'seed-cloud' && cloudStore && gate.user) {
+      void cloudStore.migrateSeed(seedFile.items as Dajare[], gate.user).then((result) => {
+        showToast(
+          result.error ??
+            (result.added === 0
+              ? '新しく入れる紙はありませんでした'
+              : `${result.added}件を共有DBに入れました`),
+        );
+        renderCloudNotes();
+      });
+      return;
+    }
+    if (action === 'upload-local' && cloudStore && gate.user) {
+      const upload = planDeviceUpload(
+        store.getState().items,
+        cloudStore.getItems(),
+        SEED_IDS,
+        seedFile.items as Dajare[],
+      );
+      ui.panel = { kind: 'upload-local', sendIds: upload.send.map((item) => item.id) };
+      panel.innerHTML = confirmUploadPanel(upload);
+      openPanel();
+      return;
+    }
+    if (
+      action === 'confirm-upload' &&
+      ui.panel.kind === 'upload-local' &&
+      cloudStore &&
+      gate.user
+    ) {
+      if (!tryBeginSave(saveLock)) return;
+      const upload = planDeviceUpload(
+        store.getState().items,
+        cloudStore.getItems(),
+        SEED_IDS,
+        seedFile.items as Dajare[],
+      );
+      const shown = ui.panel.sendIds.join('\n');
+      const now = upload.send.map((item) => item.id).join('\n');
+      if (shown !== now) {
+        endSave(saveLock);
+        ui.panel = { kind: 'upload-local', sendIds: upload.send.map((item) => item.id) };
+        panel.innerHTML = confirmUploadPanel(upload);
+        showToast('共有DBが変わったので、件数を見直してください');
+        return;
+      }
+      if (upload.send.length === 0) {
+        endSave(saveLock);
+        showToast('新しく送る紙はありません');
+        return;
+      }
+      const sendButton = panel.querySelector<HTMLButtonElement>('[data-action="confirm-upload"]');
+      if (sendButton) sendButton.disabled = true;
+      void cloudStore
+        .bulkImport(upload.send, gate.user)
+        .then((result) => {
+          if (shouldMarkUploaded(result)) window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
+          showToast(result.error ?? `${result.added}件を共有DBへ送りました`);
+          closePanel();
+          renderCloudNotes();
+        })
+        .finally(() => endSave(saveLock));
+      return;
+    }
     if (action === 'load-samples') {
       const result = store.loadSamples();
       showToast(`${result.added}件足しました。${result.skipped}件はスキップしました`);
@@ -531,10 +773,69 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (action === 'commit-import' && ui.panel.kind === 'import') {
+      if (!tryBeginSave(saveLock)) return;
       const decisions: ImportDecisions = {
         idActions: ui.idActions,
         acceptTextSceneIds: ui.acceptDupes,
       };
+      const blockSeed = cloudStore?.migrationDone() ? SEED_IDS : undefined;
+      const prepared = prepareImportCommit(
+        active().getItems(),
+        ui.panel.incoming,
+        ui.panel.plan,
+        decisions,
+        blockSeed,
+      );
+      if (prepared.stale) {
+        endSave(saveLock);
+        ui.idActions = {};
+        ui.acceptDupes = [];
+        ui.panel = { kind: 'import', plan: prepared.plan, incoming: ui.panel.incoming };
+        panel.innerHTML = importPanel(
+          prepared.plan,
+          prepared.plan.fresh.filter((item) => blockSeed?.has(item.id)).length,
+        );
+        showToast('中身が変わったので、確認をやり直してください');
+        return;
+      }
+      if (gate.mode === 'cloud' && cloudStore) {
+        if (!gate.user) {
+          endSave(saveLock);
+          showToast('編集者だけが共有できます');
+          return;
+        }
+        const importButton = panel.querySelector<HTMLButtonElement>(
+          '[data-action="commit-import"]',
+        );
+        if (importButton) importButton.disabled = true;
+        void commitCloud(cloudStore, ui.panel.incoming, prepared, gate.user)
+          .then((result) => {
+            if (result.error) {
+              showToast(result.error);
+              if (importButton) importButton.disabled = false;
+              return;
+            }
+            const seedNote = result.seedSkipped
+              ? `消した見本 ${result.seedSkipped}件は戻していません。`
+              : '';
+            if (result.changed.length) {
+              panel.innerHTML = changedAfterConfirmPanel(result.changed);
+              showToast(
+                `${result.changed.length}件は、確認のあとで直されていたので上書きしませんでした。${seedNote}`,
+              );
+              renderResults();
+              return;
+            }
+            showToast(
+              `${result.added}件足して、${result.overwritten}件上書き、${result.skipped}件スキップしました。${seedNote}`,
+            );
+            closePanel();
+            renderResults();
+          })
+          .finally(() => endSave(saveLock));
+        return;
+      }
+      endSave(saveLock);
       const result = store.commitImport(ui.panel.incoming, decisions);
       if ('error' in result) {
         showToast(result.error);
@@ -553,7 +854,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     const value = raw.trim();
     if (!value) return;
     if (kind === 'tags') {
-      if (value.length > LIMITS.tag) {
+      if (codePointLength(value) > LIMITS.tag) {
         showFormErrors([{ field: 'tags', message: `タグは${LIMITS.tag}文字までです` }]);
         return;
       }
@@ -563,7 +864,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       }
       if (!ui.draftTags.includes(value)) ui.draftTags = [...ui.draftTags, value];
     } else {
-      if (value.length > LIMITS.speaker) {
+      if (codePointLength(value) > LIMITS.speaker) {
         showFormErrors([{ field: 'speakers', message: `言った人は${LIMITS.speaker}文字までです` }]);
         return;
       }
@@ -586,7 +887,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
         draft.text.trim() || draft.scene.trim() || draft.memo.trim() || draft.reading.trim(),
       );
     }
-    const current = store.getState().items.find((item) => item.id === panelState.id);
+    const current = listedItems().find((item) => item.id === panelState.id);
     if (!current) return true;
     return (
       draft.text.trim() !== current.text ||
@@ -607,21 +908,105 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       showToast('JSONとして読めませんでした');
       return;
     }
-    const preview = store.previewImport(parsed);
-    if (!preview.ok || !preview.plan) {
-      showToast(preview.ok ? '読み込めませんでした' : preview.error);
+    const preview = parseVault(parsed);
+    if (!preview.ok) {
+      showToast(preview.error);
       return;
     }
+    const plan = planImport(active().getItems(), preview.items);
     ui.idActions = {};
     ui.acceptDupes = [];
-    ui.panel = { kind: 'import', plan: preview.plan, incoming: preview.items };
-    panel.innerHTML = importPanel(preview.plan);
+    ui.panel = { kind: 'import', plan, incoming: preview.items };
+    const seedSkipped = cloudStore?.migrationDone()
+      ? plan.fresh.filter((item) => SEED_IDS.has(item.id)).length
+      : 0;
+    panel.innerHTML = importPanel(plan, seedSkipped);
     openPanel();
   };
 
   store.subscribe(() => {
     renderResults();
   });
+  const renderCloudNotes = (): void => {
+    const slot = root.querySelector('#cloud-notes');
+    if (!slot) return;
+    if (gate.mode !== 'cloud' || !gate.isEditor || !cloudStore || !gate.user) {
+      slot.replaceChildren();
+      return;
+    }
+    const notes: string[] = [];
+    if (nameRefresh) {
+      notes.push(`<p>${escapeHtml(nameRefreshProgress(nameRefresh.done, nameRefresh.total))}</p>`);
+    } else {
+      const staleNames = nameRefreshTargets(cloudStore.getItems(), gate.user);
+      if (staleNames.length > 0) {
+        notes.push(
+          `<p>書いた人の名前が、いまの表示と違います。</p><button type="button" data-action="refresh-names">${escapeHtml(nameRefreshButtonLabel(gate.user.name, staleNames.length))}</button>`,
+        );
+      }
+    }
+    if (cloudStore.migrationPending()) {
+      notes.push(
+        '<p>初期データの移行が終わっていません。途中まで入っているときは、足りない分だけ足します。</p><button type="button" data-action="seed-cloud">初期データを共有DBに入れる</button>',
+      );
+    }
+    const uploadPlan = planDeviceUpload(
+      store.getState().items,
+      cloudStore.getItems(),
+      SEED_IDS,
+      seedFile.items as Dajare[],
+    );
+    if (
+      (hasOwnDeviceData(store.getState().items, SEED_IDS) || uploadPlan.editedSeed > 0) &&
+      !window.localStorage.getItem(LOCAL_UPLOAD_KEY)
+    ) {
+      const lead =
+        uploadPlan.send.length === 0
+          ? '<p>書き直した見本があります。共有DBへは送りません。</p>'
+          : '<p>この端末だけで書いた紙があります。</p>';
+      notes.push(
+        `${lead}<button type="button" data-action="upload-local">この端末のデータを共有DBへ送る</button>`,
+      );
+    }
+    slot.innerHTML = notes.length ? `<div class="cloud-note">${notes.join('')}</div>` : '';
+  };
+
+  // 見本のヘッダが付いているときは共有へ繋がない。書き込みはルールまで届かない。
+  if (isFirebaseConfigured(firebaseConfig) && headerChrome === null) {
+    gate.mode = 'cloud';
+    gate.user = null;
+    gate.isEditor = false;
+    syncAccount();
+    renderResults();
+    void import('../cloud/connect')
+      .then(({ connectCloud }) => connectCloud())
+      .then((cloud) => {
+        cloudStore = cloud.store;
+        cloudSignIn = () => cloud.signIn();
+        renderGoogleButton = (container, onStatus) => cloud.renderGoogleButton(container, onStatus);
+        syncAccount();
+        cloudSignOut = () => cloud.signOut();
+        cloud.subscribe((session) => {
+          gate.user = session.user;
+          gate.isEditor = session.isEditor;
+          syncAccount();
+          renderResults();
+          renderCloudNotes();
+        });
+        cloud.store.subscribe(() => {
+          renderResults();
+          renderChoices();
+          renderCloudNotes();
+        });
+      })
+      .catch(() => {
+        cloudBootError = '共有の準備に失敗しました。この端末の保存には切り替えていません';
+        showToast(cloudBootError);
+        syncAccount();
+        renderResults();
+      });
+  }
+
   window.addEventListener('storage', (event) => {
     if (event.key !== null && event.key !== DATA_KEY && event.key !== META_KEY) {
       return;
@@ -664,6 +1049,18 @@ function updateCounters(form: HTMLFormElement): void {
   }
 }
 
+function signedOutHtml(placeholder: boolean): string {
+  const face = placeholder ? '<span class="gsi-placeholder">Google でログイン</span>' : '';
+  return `<div class="login-row"><div id="gsi-button" class="gsi-slot">${face}</div><button type="button" class="quiet account-alt" data-action="sign-in">別の方法でログイン</button></div><p class="login-note" id="login-note"></p>`;
+}
+
+function signedInHtml(name: string, editor: boolean): string {
+  const badge = editor
+    ? '<span class="mode-badge">共有</span>'
+    : `<span class="mode-badge" title="${escapeHtml(loginFailureMessage('not-editor'))}">見るだけ</span>`;
+  return `<div class="account-row">${badge}<b class="account-name" title="${escapeHtml(name)}">${escapeHtml(name)}</b><button type="button" class="quiet account-logout" data-action="sign-out">ログアウト</button></div>`;
+}
+
 function shell(): string {
   return `
     <div class="paper-fiber" aria-hidden="true"></div>
@@ -677,9 +1074,12 @@ function shell(): string {
             <p class="lede">思いついた端から、紙に残す。</p>
           </div>
         </div>
-        <div class="mast-actions">
-          <button type="button" class="add-button" data-action="add">追加</button>
-          <button type="button" class="texty" data-action="settings">保管</button>
+        <div class="mast-tools">
+          <div id="account" class="account"></div>
+          <div class="mast-actions">
+            <button type="button" class="add-button" data-action="add">追加</button>
+            <button type="button" class="texty" data-action="settings">保管</button>
+          </div>
         </div>
       </header>
       <div class="search-row">
@@ -729,6 +1129,7 @@ function shell(): string {
           <button type="button" class="filter-close" data-action="toggle-filters">閉じる</button>
         </aside>
         <main>
+          <div id="cloud-notes"></div>
           <div id="banner" class="banner"></div>
           <p id="count" class="count-line" data-testid="count"></p>
           <div id="board"></div>

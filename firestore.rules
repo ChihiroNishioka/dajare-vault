@@ -1,0 +1,244 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function verifiedGoogle() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.size() > 0
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function isEditor() {
+      return verifiedGoogle()
+        && exists(
+          /databases/$(database)/documents/editors/$(request.auth.token.email.lower())
+        );
+    }
+
+    match /editors/{email} {
+      allow get: if verifiedGoogle()
+        && request.auth.token.email.lower() == email;
+
+      allow list, create, update, delete: if false;
+    }
+
+    match /dajare/{entryId} {
+      function boundedString(value, minimum, maximum) {
+        return value is string
+          && value.size() >= minimum
+          && value.size() <= maximum;
+      }
+
+      function validId(value) {
+        return value is string
+          && value.matches(
+            '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}'
+          );
+      }
+
+      function validDate(value) {
+        return value == null
+          || (
+            value is string
+            && value.size() == 10
+            && value.matches(
+              '[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])'
+            )
+          );
+      }
+
+      // Rules cannot iterate. Checking every item with boundedString, as in
+      // the review draft, exceeds the 1000-expression budget once both lists
+      // are full and would reject a valid write. Each slot is still type-checked
+      // (`is string`). Length is checked by a pattern over the joined list.
+      // Newlines are rejected so one item cannot masquerade as several.
+      function validStringList(values, itemPattern) {
+        return values is list
+          && values.size() <= 10
+          && (values.size() < 1 || values[0] is string)
+          && (values.size() < 2 || values[1] is string)
+          && (values.size() < 3 || values[2] is string)
+          && (values.size() < 4 || values[3] is string)
+          && (values.size() < 5 || values[4] is string)
+          && (values.size() < 6 || values[5] is string)
+          && (values.size() < 7 || values[6] is string)
+          && (values.size() < 8 || values[7] is string)
+          && (values.size() < 9 || values[8] is string)
+          && (values.size() < 10 || values[9] is string)
+          && values.join('').matches('[^\\n]*')
+          && (
+            values.size() == 0
+            || values.join('\n').matches(itemPattern)
+          );
+      }
+
+      function validActor(actor) {
+        return actor is map
+          && actor.keys().hasAll(['uid', 'name'])
+          && actor.keys().hasOnly(['uid', 'name'])
+          && boundedString(actor.uid, 1, 128)
+          && boundedString(actor.name, 1, 40);
+      }
+
+      // Call only after isEditor(); the alias is administrator-managed.
+      function actorIsCurrentEditor(actor) {
+        return validActor(actor)
+          && actor.uid == request.auth.uid
+          && actor.name == get(
+            /databases/$(database)/documents/editors/$(request.auth.token.email.lower())
+          ).data.publicName;
+      }
+
+      function validDocument(data) {
+        let fields = [
+          'id',
+          'text',
+          'scene',
+          'addedAt',
+          'addedAtNote',
+          'reading',
+          'source',
+          'rating',
+          'favorite',
+          'tags',
+          'speakers',
+          'memo',
+          'createdAt',
+          'updatedAt',
+          'createdBy',
+          'updatedBy'
+        ];
+
+        return data.keys().hasAll(fields)
+          && data.keys().hasOnly(fields)
+          && validId(entryId)
+          && data.id == entryId
+          && boundedString(data.text, 1, 200)
+          && boundedString(data.scene, 1, 100)
+          && validDate(data.addedAt)
+          && boundedString(data.addedAtNote, 0, 80)
+          && boundedString(data.reading, 0, 200)
+          && boundedString(data.source, 0, 100)
+          && (
+            data.rating == null
+            || (
+              data.rating is int
+              && data.rating >= 1
+              && data.rating <= 5
+            )
+          )
+          && data.favorite is bool
+          && validStringList(data.tags, '[^\\n]{1,20}(\\n[^\\n]{1,20}){0,9}')
+          && validStringList(data.speakers, '[^\\n]{1,30}(\\n[^\\n]{1,30}){0,9}')
+          && boundedString(data.memo, 0, 500)
+          && data.createdAt is timestamp
+          && data.updatedAt is timestamp
+          && validActor(data.createdBy)
+          && validActor(data.updatedBy);
+      }
+
+      function validCreate() {
+        let data = request.resource.data;
+
+        return validDocument(data)
+          && actorIsCurrentEditor(data.createdBy)
+          && data.updatedBy == data.createdBy
+          && data.createdAt == request.time
+          && data.updatedAt == request.time;
+      }
+
+      function validUpdate() {
+        let data = request.resource.data;
+
+        return validDocument(data)
+          && data.id == resource.data.id
+          && data.createdBy == resource.data.createdBy
+          && data.createdAt == resource.data.createdAt
+          && actorIsCurrentEditor(data.updatedBy)
+          && data.updatedAt == request.time
+          && data.diff(resource.data).affectedKeys().hasOnly([
+            'text',
+            'scene',
+            'addedAt',
+            'addedAtNote',
+            'reading',
+            'source',
+            'rating',
+            'favorite',
+            'tags',
+            'speakers',
+            'memo',
+            'updatedAt',
+            'updatedBy'
+          ]);
+      }
+
+      // Normal edits keep createdBy immutable. This branch is only for rewriting
+      // the caller's own display name after editors/<email>.publicName changes.
+      // updatedAt and every other field stay as they are. It is evaluated only
+      // when the diff is confined to the actor fields, so a content edit does
+      // not also pay for it (expression budget).
+      function actorKeysOnly() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return changed.size() > 0
+          && changed.hasOnly(['createdBy', 'updatedBy']);
+      }
+
+      function refreshedOwnActor(before, after, publicName) {
+        return validActor(before)
+          && validActor(after)
+          && before.uid == request.auth.uid
+          && after.uid == before.uid
+          && after.name == publicName;
+      }
+
+      function validNameRefresh() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let publicName = get(
+          /databases/$(database)/documents/editors/$(request.auth.token.email.lower())
+        ).data.publicName;
+        return (!changed.hasAny(['createdBy'])
+            || refreshedOwnActor(
+              resource.data.createdBy,
+              request.resource.data.createdBy,
+              publicName
+            ))
+          && (!changed.hasAny(['updatedBy'])
+            || refreshedOwnActor(
+              resource.data.updatedBy,
+              request.resource.data.updatedBy,
+              publicName
+            ));
+      }
+
+      allow get, list: if true;
+      // resource is null only on create. Guard so a write does not pay for
+      // both validCreate and validUpdate (that also blows the expression budget).
+      allow create: if isEditor() && resource == null && validCreate();
+      allow update: if isEditor() && resource != null
+        && (actorKeysOnly() ? validNameRefresh() : validUpdate());
+
+      // Any current editor may permanently delete any entry.
+      // Hard deletion does not retain an attribution history or tombstone.
+      allow delete: if isEditor();
+    }
+
+    // Create-only marker. While it is absent, a half-finished seed can resume.
+    // After it exists, deleted seed entries stay deleted.
+    match /meta/seedMigration {
+      allow get: if true;
+      allow create: if isEditor()
+        && request.resource.data.keys().hasAll(['doneAt'])
+        && request.resource.data.keys().hasOnly(['doneAt'])
+        && request.resource.data.doneAt == request.time;
+      allow list, update, delete: if false;
+    }
+
+    // Includes all unlisted collections and all subcollections.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

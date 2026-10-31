@@ -16,7 +16,12 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run test
-      - run: npm run build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm run test:rules
+      - run: VITE_FORCE_LOCAL=1 npm run build
       - run: npx playwright install --with-deps
       - run: npm run test:e2e
       - run: npm run screenshots

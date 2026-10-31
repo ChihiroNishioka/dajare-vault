@@ -6,12 +6,14 @@ import {
   emptyDecisions,
   type ImportDecisions,
 } from '../domain/transfer';
-import { toUtcSeconds } from '../domain/ids';
+import { isUuidV4, toUtcSeconds } from '../domain/ids';
 import { validateDraft } from '../domain/validate';
 import {
   BROKEN_PREFIX,
+  CURRENT_SCHEMA_VERSION,
   DATA_KEY,
   META_KEY,
+  type Actor,
   type Dajare,
   type DajareDraft,
   type VaultFile,
@@ -31,10 +33,12 @@ export interface Store {
   subscribe(listener: () => void): () => void;
   add(
     draft: DajareDraft,
+    options?: { actor?: Actor | null; id?: string },
   ): { ok: true; item: Dajare } | { ok: false; errors: { field: string; message: string }[] };
   update(
     id: string,
     draft: DajareDraft,
+    options?: { actor?: Actor | null },
   ): { ok: true; item: Dajare } | { ok: false; errors: { field: string; message: string }[] };
   remove(id: string): boolean;
   exportItems(): Dajare[];
@@ -56,6 +60,8 @@ export interface StoreOptions {
   now?: () => Date;
   uuid?: () => string;
   seed?: VaultFile;
+  /** 空の端末に見本を書き込む。共有モードでは false。 */
+  seedOnEmpty?: boolean;
 }
 
 const SAVE_FAILED = '保存できませんでした。エクスポートしてください';
@@ -92,6 +98,7 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
   const now = options.now ?? (() => new Date());
   const uuid = options.uuid ?? (() => crypto.randomUUID());
   const seed = options.seed ?? (seedFile as VaultFile);
+  const seedOnEmpty = options.seedOnEmpty !== false;
   const listeners = new Set<() => void>();
 
   const state: StoreState = {
@@ -120,7 +127,7 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       state.saveError = STORAGE_BLOCKED;
       return false;
     }
-    const next = JSON.stringify({ schemaVersion: seed.schemaVersion, items: state.items });
+    const next = JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION, items: state.items });
     try {
       storage.setItem(DATA_KEY, next);
     } catch {
@@ -189,6 +196,8 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       writesBlocked = false;
       brokenRaw = null;
       state.loadError = null;
+      state.items = [];
+      if (!seedOnEmpty) return;
       state.items = cloneSeed(seed);
       persist();
       return;
@@ -204,8 +213,8 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       state.loadError = null;
       state.items = parsed.items;
       if (
-        !raw.includes(`"schemaVersion":${seed.schemaVersion}`) &&
-        !raw.includes(`"schemaVersion": ${seed.schemaVersion}`)
+        !raw.includes(`"schemaVersion":${CURRENT_SCHEMA_VERSION}`) &&
+        !raw.includes(`"schemaVersion": ${CURRENT_SCHEMA_VERSION}`)
       ) {
         persist();
       }
@@ -222,10 +231,19 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    add(draft) {
+    add(draft, options) {
       const validated = validateDraft(draft);
       if (!validated.ok) return { ok: false, errors: validated.errors };
-      const item: Dajare = { ...validated.value, id: uuid(), updatedAt: toUtcSeconds(now()) };
+      const stamp = toUtcSeconds(now());
+      const actor = options?.actor ?? null;
+      const item: Dajare = {
+        ...validated.value,
+        id: options?.id && isUuidV4(options.id) ? options.id : uuid(),
+        updatedAt: stamp,
+        createdAt: stamp,
+        createdBy: actor,
+        updatedBy: actor,
+      };
       const saved = mutate(() => {
         state.items = [item, ...state.items];
         bump();
@@ -234,13 +252,20 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
         return { ok: false, errors: [{ field: 'form', message: state.saveError ?? SAVE_FAILED }] };
       return { ok: true, item };
     },
-    update(id, draft) {
+    update(id, draft, options) {
       const current = state.items.find((item) => item.id === id);
       if (!current)
         return { ok: false, errors: [{ field: 'form', message: '見つかりませんでした' }] };
       const validated = validateDraft(draft);
       if (!validated.ok) return { ok: false, errors: validated.errors };
-      const item: Dajare = { ...validated.value, id, updatedAt: toUtcSeconds(now()) };
+      const item: Dajare = {
+        ...validated.value,
+        id,
+        updatedAt: toUtcSeconds(now()),
+        createdAt: current.createdAt ?? current.updatedAt,
+        createdBy: current.createdBy ?? null,
+        updatedBy: options?.actor ?? current.updatedBy ?? null,
+      };
       const saved = mutate(() => {
         state.items = state.items.map((row) => (row.id === id ? item : row));
         bump();

@@ -17,6 +17,13 @@ export const LIMITS = {
 /** ひらがな・長音・読点・空白だけを推奨。外れていても保存はできる。 */
 export const READING_RE = /^[\u3041-\u3096\u30fc\u3001\s]*$/u;
 
+/**
+ * タグと話者のルールはコードポイントで数える。本文などの `size()` は UTF-16 なので `.length` のまま。
+ */
+export function codePointLength(value: string): number {
+  return [...value].length;
+}
+
 export interface FieldError {
   field: string;
   message: string;
@@ -39,7 +46,7 @@ export function normalizeTags(tags: string[]): { tags: string[]; error: string |
   for (const raw of tags) {
     const tag = raw.trim();
     if (!tag) continue;
-    if (tag.length > LIMITS.tag) {
+    if (codePointLength(tag) > LIMITS.tag) {
       return { tags: out, error: `タグは${LIMITS.tag}文字までです` };
     }
     if (!out.includes(tag)) out.push(tag);
@@ -58,7 +65,7 @@ export function normalizeSpeakers(speakers: string[]): {
   for (const raw of speakers) {
     const name = raw.trim();
     if (!name) continue;
-    if (name.length > LIMITS.speaker) {
+    if (codePointLength(name) > LIMITS.speaker) {
       return { speakers: out, error: `言った人は${LIMITS.speaker}文字までです` };
     }
     if (!out.includes(name)) out.push(name);
