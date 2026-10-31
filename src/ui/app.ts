@@ -23,7 +23,7 @@ import { commitCloud } from '../cloud/commit-cloud';
 import { loginFailureMessage } from '../cloud/google-identity';
 import { CLOUD_NOT_READY } from '../cloud/messages';
 import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
-import { readPreviewActor } from '../session';
+import { readHeaderMock, readPreviewActor } from '../session';
 import type { Actor } from '../types';
 import { defineCard, type DajareCard } from './card';
 import { endSave, tryBeginSave } from './save-lock';
@@ -73,6 +73,11 @@ export function mount(
     seedOnEmpty: !isFirebaseConfigured(firebaseConfig),
   }),
 ): void {
+  // 本番の共有ビルドでは右辺ごと消える。見本は Firestore に繋がない。
+  const headerChrome =
+    import.meta.env.PROD && import.meta.env.VITE_FORCE_LOCAL !== '1'
+      ? null
+      : readHeaderMock(window.location.search);
   const preview = isFirebaseConfigured(firebaseConfig)
     ? null
     : readPreviewActor(window.localStorage);
@@ -82,6 +87,8 @@ export function mount(
     isEditor: true,
   };
   const canEdit = (): boolean => {
+    if (headerChrome?.kind === 'signed-out') return false;
+    if (headerChrome?.kind === 'signed-in') return headerChrome.editor;
     if (cloudStore?.readError() === CLOUD_NOT_READY) return false;
     return gate.mode === 'local' || gate.isEditor;
   };
@@ -217,16 +224,22 @@ export function mount(
     root.querySelectorAll<HTMLElement>('[data-action="add"]').forEach((button) => {
       button.hidden = !canEdit();
     });
+    if (headerChrome?.kind === 'signed-out') {
+      if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(true);
+      return;
+    }
+    if (headerChrome?.kind === 'signed-in') {
+      slot.innerHTML = signedInHtml(headerChrome.name, headerChrome.editor);
+      return;
+    }
     if (gate.mode === 'local') {
       slot.innerHTML = gate.user
-        ? `<p class="who"><b>${escapeHtml(gate.user.name)}</b><span>見本のログイン</span></p>`
-        : `<p class="who"><span>この端末だけ</span></p>`;
+        ? `<div class="account-row"><b class="account-name" title="${escapeHtml(gate.user.name)}">${escapeHtml(gate.user.name)}</b><span class="mode-badge">見本のログイン</span></div>`
+        : `<div class="account-row"><span class="mode-badge">この端末だけ</span></div>`;
       return;
     }
     if (!gate.user) {
-      if (!slot.querySelector('#gsi-button')) {
-        slot.innerHTML = `<div class="login-stack"><p class="who"><span>共有</span></p><div id="gsi-button"></div><p class="login-note" id="login-note"></p><button type="button" class="quiet" data-action="sign-in">別の方法でログイン</button></div>`;
-      }
+      if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(false);
       const host = slot.querySelector<HTMLElement>('#gsi-button');
       if (host && host.childElementCount === 0) {
         renderGoogleButton?.(host, (code) => {
@@ -236,10 +249,7 @@ export function mount(
       }
       return;
     }
-    const viewer = gate.isEditor
-      ? '<span>共有</span>'
-      : `<span>${escapeHtml(loginFailureMessage('not-editor'))}</span>`;
-    slot.innerHTML = `<p class="who"><b>${escapeHtml(gate.user.name)}</b>${viewer}<button type="button" class="quiet" data-action="sign-out">ログアウト</button></p>`;
+    slot.innerHTML = signedInHtml(gate.user.name, gate.isEditor);
   };
 
   const listedItems = (): Dajare[] =>
@@ -926,7 +936,8 @@ export function mount(
     slot.innerHTML = notes.length ? `<div class="cloud-note">${notes.join('')}</div>` : '';
   };
 
-  if (isFirebaseConfigured(firebaseConfig)) {
+  // 見本のヘッダが付いているときは共有へ繋がない。書き込みはルールまで届かない。
+  if (isFirebaseConfigured(firebaseConfig) && headerChrome === null) {
     gate.mode = 'cloud';
     gate.user = null;
     gate.isEditor = false;
@@ -1003,6 +1014,18 @@ function updateCounters(form: HTMLFormElement): void {
   }
 }
 
+function signedOutHtml(placeholder: boolean): string {
+  const face = placeholder ? '<span class="gsi-placeholder">Google でログイン</span>' : '';
+  return `<div class="login-row"><div id="gsi-button" class="gsi-slot">${face}</div><button type="button" class="quiet account-alt" data-action="sign-in">別の方法でログイン</button></div><p class="login-note" id="login-note"></p>`;
+}
+
+function signedInHtml(name: string, editor: boolean): string {
+  const badge = editor
+    ? '<span class="mode-badge">共有</span>'
+    : `<span class="mode-badge" title="${escapeHtml(loginFailureMessage('not-editor'))}">見るだけ</span>`;
+  return `<div class="account-row">${badge}<b class="account-name" title="${escapeHtml(name)}">${escapeHtml(name)}</b><button type="button" class="quiet account-logout" data-action="sign-out">ログアウト</button></div>`;
+}
+
 function shell(): string {
   return `
     <div class="paper-fiber" aria-hidden="true"></div>
@@ -1016,10 +1039,12 @@ function shell(): string {
             <p class="lede">思いついた端から、紙に残す。</p>
           </div>
         </div>
-        <div class="mast-actions">
+        <div class="mast-tools">
           <div id="account" class="account"></div>
-          <button type="button" class="add-button" data-action="add">追加</button>
-          <button type="button" class="texty" data-action="settings">保管</button>
+          <div class="mast-actions">
+            <button type="button" class="add-button" data-action="add">追加</button>
+            <button type="button" class="texty" data-action="settings">保管</button>
+          </div>
         </div>
       </header>
       <div class="search-row">
