@@ -1,0 +1,31 @@
+{
+  "name": "dajare-vault",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test --project=pc-chromium --project=iphone-webkit",
+    "screenshots": "playwright test --project=screenshots-pc --project=screenshots-iphone",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "seed:write": "tsx scripts/write-seed.ts",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.9.1",
+    "eslint": "^9.39.1",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4"
+  }
+}
