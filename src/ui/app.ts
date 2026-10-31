@@ -20,6 +20,7 @@ import { SEED_IDS } from '../data/seed-ids';
 import seedFile from '../data/seed.json';
 import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
 import { commitCloud } from '../cloud/commit-cloud';
+import { loginFailureMessage } from '../cloud/google-identity';
 import { CLOUD_NOT_READY } from '../cloud/messages';
 import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
 import { readPreviewActor } from '../session';
@@ -86,6 +87,8 @@ export function mount(
   };
   let cloudStore: DajareStore | null = null;
   let cloudSignIn: (() => Promise<void>) | null = null;
+  let renderGoogleButton:
+    ((container: HTMLElement, onStatus: (code: string) => void) => void) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
   let cloudBootError: string | null = null;
   const localApi = adaptLocalStore(store);
@@ -221,10 +224,21 @@ export function mount(
       return;
     }
     if (!gate.user) {
-      slot.innerHTML = `<p class="who"><span>共有</span></p><button type="button" class="texty" data-action="sign-in">ログイン</button>`;
+      if (!slot.querySelector('#gsi-button')) {
+        slot.innerHTML = `<div class="login-stack"><p class="who"><span>共有</span></p><div id="gsi-button"></div><p class="login-note" id="login-note"></p><button type="button" class="quiet" data-action="sign-in">別の方法でログイン</button></div>`;
+      }
+      const host = slot.querySelector<HTMLElement>('#gsi-button');
+      if (host && host.childElementCount === 0) {
+        renderGoogleButton?.(host, (code) => {
+          const note = slot.querySelector('#login-note');
+          if (note) note.textContent = loginFailureMessage(code);
+        });
+      }
       return;
     }
-    const viewer = gate.isEditor ? '<span>共有</span>' : '<span>閲覧のみ</span>';
+    const viewer = gate.isEditor
+      ? '<span>共有</span>'
+      : `<span>${escapeHtml(loginFailureMessage('not-editor'))}</span>`;
     slot.innerHTML = `<p class="who"><b>${escapeHtml(gate.user.name)}</b>${viewer}<button type="button" class="quiet" data-action="sign-out">ログアウト</button></p>`;
   };
 
@@ -641,12 +655,10 @@ export function mount(
       void cloudSignIn().catch((error: unknown) => {
         const code =
           error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
-        if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
-        if (code === 'auth/popup-blocked') {
-          showToast('ログイン画面が開けませんでした。もう一度タップしてください');
-          return;
-        }
-        showToast('ログインできませんでした');
+        const message = loginFailureMessage(code);
+        const note = root.querySelector('#login-note');
+        if (note) note.textContent = message;
+        showToast(message);
       });
       return;
     }
@@ -925,6 +937,8 @@ export function mount(
       .then((cloud) => {
         cloudStore = cloud.store;
         cloudSignIn = () => cloud.signIn();
+        renderGoogleButton = (container, onStatus) => cloud.renderGoogleButton(container, onStatus);
+        syncAccount();
         cloudSignOut = () => cloud.signOut();
         cloud.subscribe((session) => {
           gate.user = session.user;

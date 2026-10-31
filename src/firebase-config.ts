@@ -9,6 +9,8 @@ export interface FirebaseWebConfig {
   storageBucket: string;
   messagingSenderId: string;
   appId: string;
+  /** Google Identity Services のウェブクライアント ID。公開してよい。 */
+  googleClientId: string;
 }
 
 export const firebaseConfig: FirebaseWebConfig = {
@@ -18,6 +20,7 @@ export const firebaseConfig: FirebaseWebConfig = {
   storageBucket: 'dajare-vault.firebasestorage.app',
   messagingSenderId: '850264162402',
   appId: '1:850264162402:web:5bcfbca3707df3bad3d13b',
+  googleClientId: '850264162402-257tr97l8dthgs70nmfk9cp7lje9oc39.apps.googleusercontent.com',
 };
 
 export function isFirebaseConfigured(

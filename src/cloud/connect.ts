@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  signInWithCredential,
   signInWithPopup,
   signOut as firebaseSignOut,
   type User,
@@ -17,6 +18,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured, type FirebaseWebConfig } from '../firebase-config';
+import { loadGoogleIdentity, mountGoogleButton } from './google-identity';
 import type { Actor } from '../types';
 import { createFirestoreStore } from './firestore-store';
 import type { DajareStore } from '../store/dajare-store';
@@ -30,8 +32,10 @@ export interface CloudSession {
 export interface CloudConnection {
   store: DajareStore;
   subscribe(listener: (session: CloudSession) => void): () => void;
-  /** クリックの中から、await より前に呼ぶ。ポップアップだけ。 */
+  /** 予備。クリックの中から、await より前に呼ぶ。 */
   signIn(): Promise<void>;
+  /** Google Identity Services のボタンを描く。読み込めなければ onStatus('gsi-load' など)。 */
+  renderGoogleButton(container: HTMLElement, onStatus: (code: string) => void): void;
   signOut(): Promise<void>;
 }
 
@@ -51,6 +55,7 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
   }
   const app = initializeApp(config);
   const auth = getAuth(app);
+  const googleButton = loadGoogleIdentity().catch(() => null);
   const db = openFirestore(app);
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
@@ -103,6 +108,37 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
     },
     signIn() {
       return signInWithPopup(auth, provider).then(() => undefined);
+    },
+    renderGoogleButton(container, onStatus) {
+      void googleButton.then((id) => {
+        if (!id) {
+          onStatus('gsi-load');
+          return;
+        }
+        if (!config.googleClientId) {
+          onStatus('gsi-origin');
+          return;
+        }
+        try {
+          mountGoogleButton(
+            id,
+            container,
+            config.googleClientId,
+            (idToken) => {
+              void signInWithCredential(auth, GoogleAuthProvider.credential(idToken)).catch(
+                (error: unknown) => {
+                  const code =
+                    error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+                  onStatus(code || 'auth/unknown');
+                },
+              );
+            },
+            () => onStatus('gsi-closed'),
+          );
+        } catch {
+          onStatus('gsi-origin');
+        }
+      });
     },
     async signOut() {
       await firebaseSignOut(auth);
