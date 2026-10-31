@@ -225,6 +225,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     },
     getItems: () => items,
     migrationPending: () => migrationState === 'pending',
+    migrationDone: () => migrationState === 'done',
     readError,
     async create(draft, who, id) {
       const person = who ?? actor();
@@ -239,6 +240,21 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
       }
       const itemId = id ?? crypto.randomUUID();
       try {
+        if (SEED_IDS.has(itemId)) {
+          const outcome = await createIfAbsent(itemId, validated.value, person);
+          if (outcome === 'skipped') return { ok: true, skipped: 'seed' };
+          const saved = items.find((row) => row.id === itemId);
+          return saved
+            ? { ok: true, item: saved }
+            : {
+                ok: true,
+                item: dajareFromDoc(itemId, {
+                  ...contentOf(validated.value),
+                  createdBy: publicActor(person),
+                  updatedBy: publicActor(person),
+                }),
+              };
+        }
         await setDoc(doc(db, COLLECTION, itemId), createFields(itemId, validated.value, person));
         const saved = items.find((row) => row.id === itemId);
         return saved
@@ -255,7 +271,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
         return { ok: false, error: failureMessage(error, '保存できませんでした') };
       }
     },
-    async update(id, draft, who) {
+    async update(id, draft, who, options) {
       const person = who ?? actor();
       if (!person) return { ok: false, error: 'ログインが必要です' };
       const validated = validateDraft(draft);
@@ -268,12 +284,34 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
       }
       const previous = items.find((row) => row.id === id);
       if (!previous) return { ok: false, error: '見つかりませんでした' };
+      const patch = {
+        ...contentOf(validated.value),
+        updatedAt: serverTimestamp(),
+        updatedBy: publicActor(person),
+      };
       try {
-        await updateDoc(doc(db, COLLECTION, id), {
-          ...contentOf(validated.value),
-          updatedAt: serverTimestamp(),
-          updatedBy: publicActor(person),
-        });
+        if (options?.expectedUpdatedAt) {
+          const ref = doc(db, COLLECTION, id);
+          let changed = false;
+          await withContentionRetry(() =>
+            runTransaction(db, async (tx) => {
+              const snap = await tx.get(ref);
+              if (!snap.exists()) {
+                changed = true;
+                return;
+              }
+              const current = timestampToIso(snap.get('updatedAt'));
+              if (current !== options.expectedUpdatedAt) {
+                changed = true;
+                return;
+              }
+              tx.update(ref, patch);
+            }),
+          );
+          if (changed) return { ok: true, skipped: 'changed' };
+          return { ok: true, item: items.find((row) => row.id === id) ?? previous };
+        }
+        await updateDoc(doc(db, COLLECTION, id), patch);
         return { ok: true, item: items.find((row) => row.id === id) ?? previous };
       } catch (error) {
         return { ok: false, error: failureMessage(error, '保存できませんでした') };

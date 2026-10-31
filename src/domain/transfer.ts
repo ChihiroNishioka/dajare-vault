@@ -275,29 +275,44 @@ function idLine(items: { id: string }[]): string {
   return items.map((item) => item.id).join('\n');
 }
 
-/** 確認画面と書き込みが同じ仕分けかを比べる。 */
+/** 確認画面と書き込みが同じ仕分けかを比べる。上書き対象の updatedAt も含む。 */
 export function planSignature(plan: ImportPlan): string {
+  const conflicts = plan.idConflicts
+    .map((row) => `${row.incoming.id}@${row.existing.updatedAt}`)
+    .join('\n');
   return [
     idLine(plan.fresh),
-    idLine(plan.idConflicts.map((row) => row.incoming)),
+    conflicts,
     idLine(plan.textSceneDupes.map((row) => row.incoming)),
   ].join('\n---\n');
+}
+
+export interface ImportWrite {
+  createIds: string[];
+  updateIds: { id: string; expectedUpdatedAt: string }[];
+  /** 印があるあいだ、戻さない見本。 */
+  seedSkippedIds: string[];
 }
 
 export function importWriteSet(
   plan: ImportPlan,
   decisions: ImportDecisions,
-): { createIds: string[]; updateIds: string[] } {
+  blockSeedIds?: ReadonlySet<string>,
+): ImportWrite {
+  const seedSkippedIds = blockSeedIds
+    ? plan.fresh.filter((item) => blockSeedIds.has(item.id)).map((item) => item.id)
+    : [];
+  const blocked = new Set(seedSkippedIds);
   const updateIds = plan.idConflicts
     .filter((row) => (decisions.idActions[row.incoming.id] ?? 'skip') === 'overwrite')
-    .map((row) => row.incoming.id);
+    .map((row) => ({ id: row.incoming.id, expectedUpdatedAt: row.existing.updatedAt }));
   const createIds = [
-    ...plan.fresh.map((item) => item.id),
+    ...plan.fresh.filter((item) => !blocked.has(item.id)).map((item) => item.id),
     ...plan.textSceneDupes
       .filter((row) => decisions.acceptTextSceneIds.includes(row.incoming.id))
       .map((row) => row.incoming.id),
   ];
-  return { createIds, updateIds };
+  return { createIds, updateIds, seedSkippedIds };
 }
 
 /**
@@ -309,12 +324,11 @@ export function prepareImportCommit(
   incoming: Dajare[],
   shown: ImportPlan,
   decisions: ImportDecisions,
-):
-  | { stale: true; plan: ImportPlan }
-  | { stale: false; plan: ImportPlan; createIds: string[]; updateIds: string[] } {
+  blockSeedIds?: ReadonlySet<string>,
+): { stale: true; plan: ImportPlan } | ({ stale: false; plan: ImportPlan } & ImportWrite) {
   const plan = planImport(existing, incoming);
   if (planSignature(plan) !== planSignature(shown)) return { stale: true, plan };
-  return { stale: false, plan, ...importWriteSet(plan, decisions) };
+  return { stale: false, plan, ...importWriteSet(plan, decisions, blockSeedIds) };
 }
 
 export interface DeviceUploadPlan {
@@ -326,6 +340,8 @@ export interface DeviceUploadPlan {
   different: number;
   /** この端末にある見本のうち、共有DBに無い件数。送らない。 */
   seedMissing: number;
+  /** 見本の id だが、中身が見本と違う。送らない。 */
+  editedSeed: number;
 }
 
 function contentKey(item: Dajare): string {
@@ -353,14 +369,19 @@ export function planDeviceUpload(
   localItems: Dajare[],
   sharedItems: Dajare[],
   seedIds: ReadonlySet<string>,
+  canonicalSeed: Dajare[] = [],
 ): DeviceUploadPlan {
   const sharedById = new Map(sharedItems.map((item) => [item.id, item]));
+  const canonicalById = new Map(canonicalSeed.map((item) => [item.id, item]));
   const send: Dajare[] = [];
   let already = 0;
   let different = 0;
   let seedMissing = 0;
+  let editedSeed = 0;
   for (const item of localItems) {
     if (seedIds.has(item.id)) {
+      const canonical = canonicalById.get(item.id);
+      if (canonical && contentKey(item) !== contentKey(canonical)) editedSeed += 1;
       if (!sharedById.has(item.id)) seedMissing += 1;
       continue;
     }
@@ -372,7 +393,7 @@ export function planDeviceUpload(
     already += 1;
     if (contentKey(item) !== contentKey(shared)) different += 1;
   }
-  return { send, already, different, seedMissing };
+  return { send, already, different, seedMissing, editedSeed };
 }
 
 /** 1件も足せなかった送信は、送り終わったことにしない。 */

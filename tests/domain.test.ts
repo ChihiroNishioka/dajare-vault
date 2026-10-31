@@ -324,7 +324,8 @@ describe('transfer', () => {
     expect(prepared.stale).toBe(false);
     if (prepared.stale) return;
     expect(prepared.createIds).toEqual([fresh.id]);
-    expect(prepared.updateIds).toEqual([sample.id]);
+    expect(prepared.updateIds.map((row) => row.id)).toEqual([sample.id]);
+    expect(prepared.updateIds[0]?.expectedUpdatedAt).toBe(sample.updatedAt);
     const applied = applyImport(shared, shown, decisions);
     expect(applied.added).toBe(prepared.createIds.length);
     expect(applied.overwritten).toBe(prepared.updateIds.length);
@@ -340,6 +341,29 @@ describe('transfer', () => {
     expect(drifted.stale).toBe(true);
     if (!drifted.stale) return;
     expect(importWriteSet(drifted.plan, decisions).createIds).not.toEqual(prepared.createIds);
+
+    const moved = { ...sample, updatedAt: '2026-10-31T01:02:03Z' };
+    const afterEdit = planImport([moved], incoming);
+    expect(planSignature(afterEdit)).not.toBe(planSignature(shown));
+  });
+
+  it('counts deleted seed rows on an import and leaves edited seed rows out of a send', () => {
+    const seedIds = new Set([seedId(1), seedId(2)]);
+    const canonical = item({ id: seedId(2), text: '見本のまま', scene: '場面' });
+    const deleted = item({ id: seedId(1), text: '消した見本', scene: '場面' });
+    const edited = item({ id: seedId(2), text: '端末で直した', scene: '場面' });
+    const shared = [canonical];
+    const incoming = [deleted, edited];
+    const shown = planImport(shared, incoming);
+    const prepared = prepareImportCommit(shared, incoming, shown, emptyDecisions(), seedIds);
+    expect(prepared.stale).toBe(false);
+    if (prepared.stale) return;
+    expect(prepared.seedSkippedIds).toEqual([deleted.id]);
+    expect(prepared.createIds).not.toContain(deleted.id);
+    const upload = planDeviceUpload([edited], shared, seedIds, [canonical]);
+    expect(upload.send).toEqual([]);
+    expect(upload.editedSeed).toBe(1);
+    expect(upload.seedMissing).toBe(0);
   });
 
   it('sends only this device’s own puns, never a missing seed row', () => {

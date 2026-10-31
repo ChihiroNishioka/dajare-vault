@@ -17,8 +17,11 @@ import {
   serverTimestamp,
   type Firestore,
 } from 'firebase/firestore';
+import { commitCloud } from '../src/cloud/commit-cloud';
 import { createFirestoreStore } from '../src/cloud/firestore-store';
+import { SEED_IDS } from '../src/data/seed-ids';
 import seedFile from '../src/data/seed.json';
+import { emptyDecisions, planImport, prepareImportCommit } from '../src/domain/transfer';
 import { seedId } from '../src/domain/ids';
 import type { Dajare } from '../src/types';
 import { actor, registerStoreContract, sampleDraft } from './store-contract.cases';
@@ -463,6 +466,69 @@ describe.skipIf(!emulatorUp)('seed migration', () => {
     for (const kept of seedItems.slice(1)) {
       expect(await storedText(kept.id)).toBe(kept.text);
     }
+  });
+
+  it('印のあと、古い書き出しを読み込んでも消した見本は戻らない', async () => {
+    const store = open();
+    const seedItems = (seedFile as { items: Dajare[] }).items.slice(0, 3);
+    const removed = seedItems[0];
+    const extra = pun(seedId(501), '書き出しの新しい紙');
+    if (!removed) throw new Error('missing seed');
+    await waitFor(() => store.migrationPending());
+    const migrated = await store.migrateSeed(seedItems, actor);
+    expect(migrated.error).toBeUndefined();
+    expect(migrated.added).toBe(seedItems.length);
+    await waitFor(() => store.migrationDone());
+    expect((await store.remove(removed.id)).ok).toBe(true);
+    await waitFor(() => store.getItems().every((item) => item.id !== removed.id));
+    const incoming = [...seedItems, extra];
+    const shown = planImport(store.getItems(), incoming);
+    const prepared = prepareImportCommit(
+      store.getItems(),
+      incoming,
+      shown,
+      emptyDecisions(),
+      SEED_IDS,
+    );
+    expect(prepared.stale).toBe(false);
+    if (prepared.stale) return;
+    expect(prepared.seedSkippedIds).toContain(removed.id);
+    expect(prepared.createIds).not.toContain(removed.id);
+    const imported = await commitCloud(
+      store,
+      incoming,
+      { createIds: [removed.id, extra.id], updateIds: [], seedSkippedIds: [] },
+      actor,
+    );
+    expect(imported.error).toBeUndefined();
+    expect(imported.seedSkipped).toBe(1);
+    expect(imported.added).toBe(1);
+    expect(await storedText(removed.id)).toBe('');
+    expect(await storedText(extra.id)).toBe('書き出しの新しい紙');
+  });
+
+  it('確認のあとで直された紙は上書きしない', async () => {
+    const store = open();
+    const created = await store.create(sampleDraft('元の本文'), actor);
+    expect(created.ok).toBe(true);
+    await waitFor(() =>
+      store.getItems().some((item) => item.text === '元の本文' && item.updatedAt !== ''),
+    );
+    const item = store.getItems().find((row) => row.text === '元の本文');
+    if (!item) throw new Error('missing item');
+    const expected = item.updatedAt;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const edited = await store.update(item.id, sampleDraft('誰かが直した'), actor);
+    expect(edited.ok).toBe(true);
+    await waitFor(() =>
+      store.getItems().some((row) => row.id === item.id && row.updatedAt !== expected),
+    );
+    const skipped = await store.update(item.id, sampleDraft('上書き'), actor, {
+      expectedUpdatedAt: expected,
+    });
+    expect(skipped.ok).toBe(true);
+    expect(skipped.skipped).toBe('changed');
+    expect(await storedText(item.id)).toBe('誰かが直した');
   });
 
   it('ありえない日付は共有DBに書かない', async () => {

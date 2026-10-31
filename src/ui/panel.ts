@@ -74,7 +74,7 @@ export function formPanel(
         <fieldset>
           <legend>言った人</legend>
           ${chips('draft-speakers', speakers)}
-          <input id="speaker-draft" maxlength="${LIMITS.speaker}" placeholder="名前を書いて Enter" />
+          <input id="speaker-draft" maxlength="${LIMITS.speaker * 2}" placeholder="名前を書いて Enter" />
           ${suggestions('speaker', SUGGESTED_SPEAKERS)}
         </fieldset>
         <p class="field-error" data-error-for="speakers"></p>
@@ -86,7 +86,7 @@ export function formPanel(
         <fieldset>
           <legend>タグ</legend>
           ${chips('draft-tags', tags)}
-          <input id="tag-draft" maxlength="${LIMITS.tag}" placeholder="タグを書いて Enter" />
+          <input id="tag-draft" maxlength="${LIMITS.tag * 2}" placeholder="タグを書いて Enter" />
           ${suggestions('tag', SUGGESTED_TAGS)}
         </fieldset>
         <p class="field-error" data-error-for="tags"></p>
@@ -167,6 +167,7 @@ export function confirmUploadPanel(counts: {
   already: number;
   different: number;
   seedMissing: number;
+  editedSeed: number;
 }): string {
   const send =
     counts.send.length > 0
@@ -178,6 +179,11 @@ export function confirmUploadPanel(counts: {
       <p>この端末で書いた紙のうち、${counts.send.length}件を共有DBに送ります。送った内容は、URLを知っている人なら誰でも読めます。</p>
       <p>すでに同じIDがある ${counts.already}件は飛ばします。中身が違う ${counts.different}件も上書きしません。</p>
       <p>初期データで、共有DBに無い ${counts.seedMissing}件は送りません。消した見本は戻りません。</p>
+      ${
+        counts.editedSeed
+          ? `<p>書き直した見本 ${counts.editedSeed}件は送りません。必要なら書き出してください。</p>`
+          : ''
+      }
       <div class="sheet-actions">
         ${send}
         <button type="button" data-action="close-panel">やめる</button>
@@ -199,7 +205,7 @@ export function promptPanel(): string {
   `;
 }
 
-function listConflicts(plan: ImportPlan): string {
+function listConflicts(plan: ImportPlan, seedSkipped = 0): string {
   const idRows = plan.idConflicts
     .map((row) => {
       const label = escapeHtml(row.incoming.text.split('\n')[0] ?? '');
@@ -223,8 +229,9 @@ function listConflicts(plan: ImportPlan): string {
         <h2 id="panel-title">読み込みの確認</h2>
         <button type="button" data-action="close-panel">閉じる</button>
       </header>
-      <p>新規 ${plan.fresh.length} 件。同じIDが ${plan.idConflicts.length} 件あります。標準ではスキップします。</p>
+      <p>新規 ${plan.fresh.length - seedSkipped} 件。同じIDが ${plan.idConflicts.length} 件あります。標準ではスキップします。</p>
       <p>本文とシーンが同じものは ${plan.textSceneDupes.length} 件。選んだものだけ足します。</p>
+      ${seedSkipped ? `<p>消した見本 ${seedSkipped} 件は戻しません。</p>` : ''}
       ${
         plan.idConflicts.length
           ? `<details open><summary>同じID</summary><ul class="conflict-list">${idRows}</ul></details>`
@@ -243,6 +250,22 @@ function listConflicts(plan: ImportPlan): string {
   `;
 }
 
-export function importPanel(plan: ImportPlan): string {
-  return listConflicts(plan);
+export function importPanel(plan: ImportPlan, seedSkipped = 0): string {
+  return listConflicts(plan, seedSkipped);
+}
+
+export function changedAfterConfirmPanel(items: { text: string }[]): string {
+  const rows = items
+    .map((item) => `<li>${escapeHtml(item.text.split('\n')[0] ?? '')}</li>`)
+    .join('');
+  return `
+    <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+      <h2 id="panel-title">上書きしませんでした</h2>
+      <p>確認のあとで直されていたので、次の紙はそのままにしました。</p>
+      <ul class="conflict-list">${rows}</ul>
+      <div class="sheet-actions">
+        <button type="button" data-action="close-panel">閉じる</button>
+      </div>
+    </div>
+  `;
 }

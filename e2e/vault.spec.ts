@@ -60,6 +60,16 @@ test('lists the seed, keeps a new pun after reload, and blocks an empty save', a
   await expect(page.getByText('布団がふっとんだ')).toBeVisible();
 });
 
+test('a second tap on save does not add another pun', async ({ page }) => {
+  await page.getByRole('button', { name: '追加' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('本文').fill('二度押しの試し');
+  await dialog.locator('input[name="scene"]').fill('場面');
+  await page.getByRole('button', { name: '保存' }).dblclick();
+  await expect(page.getByText('二度押しの試し')).toHaveCount(1);
+  await expect(page.locator('dajare-card', { hasText: '二度押しの試し' })).toHaveCount(1);
+});
+
 test('edits a pun and refreshes updatedAt', async ({ page }) => {
   const card = page.locator('dajare-card', { hasText: 'イクラはいくら？' });
   const before = await card.locator('time.updated').getAttribute('datetime');

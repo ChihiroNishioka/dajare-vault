@@ -19,17 +19,20 @@ import { createStore, type Store } from '../store/store';
 import { SEED_IDS } from '../data/seed-ids';
 import seedFile from '../data/seed.json';
 import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
+import { commitCloud } from '../cloud/commit-cloud';
 import { CLOUD_NOT_READY } from '../cloud/messages';
 import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
 import { readPreviewActor } from '../session';
 import type { Actor } from '../types';
 import { defineCard, type DajareCard } from './card';
+import { endSave, tryBeginSave } from './save-lock';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
 import {
   confirmUploadPanel,
   deletePanel,
   formPanel,
+  changedAfterConfirmPanel,
   importPanel,
   promptPanel,
   settingsPanel,
@@ -59,6 +62,7 @@ const ui = {
 };
 
 let toastTimer = 0;
+const saveLock = { held: false };
 
 const LOCAL_UPLOAD_KEY = 'dajareVault:uploadedLocal';
 
@@ -328,22 +332,31 @@ export function mount(
   };
 
   const saveForm = (): void => {
+    if (!tryBeginSave(saveLock)) return;
     const draft = readDraft();
-    if (!draft || ui.panel.kind !== 'form') return;
+    if (!draft || ui.panel.kind !== 'form') {
+      endSave(saveLock);
+      return;
+    }
+    const saveButton = panel.querySelector<HTMLButtonElement>('[data-action="save"]');
+    if (saveButton) saveButton.disabled = true;
     const editing = ui.panel.mode === 'edit' && ui.panel.id ? ui.panel.id : '';
     const pending = editing
       ? active().update(editing, draft, gate.user)
       : active().create(draft, gate.user);
-    void pending.then((result) => {
-      if (!result.ok) {
-        showFormErrors(
-          result.errors ?? [{ field: 'form', message: result.error ?? '保存できませんでした' }],
-        );
-        return;
-      }
-      showToast(editing ? '書き直しました' : '紙を足しました');
-      afterWrite();
-    });
+    void pending
+      .then((result) => {
+        if (!result.ok) {
+          showFormErrors(
+            result.errors ?? [{ field: 'form', message: result.error ?? '保存できませんでした' }],
+          );
+          if (saveButton) saveButton.disabled = false;
+          return;
+        }
+        showToast(editing ? '書き直しました' : '紙を足しました');
+        afterWrite();
+      })
+      .finally(() => endSave(saveLock));
   };
 
   const download = (filename: string, contents: string): void => {
@@ -654,7 +667,12 @@ export function mount(
       return;
     }
     if (action === 'upload-local' && cloudStore && gate.user) {
-      const upload = planDeviceUpload(store.getState().items, cloudStore.getItems(), SEED_IDS);
+      const upload = planDeviceUpload(
+        store.getState().items,
+        cloudStore.getItems(),
+        SEED_IDS,
+        seedFile.items as Dajare[],
+      );
       ui.panel = { kind: 'upload-local', sendIds: upload.send.map((item) => item.id) };
       panel.innerHTML = confirmUploadPanel(upload);
       openPanel();
@@ -666,25 +684,38 @@ export function mount(
       cloudStore &&
       gate.user
     ) {
-      const upload = planDeviceUpload(store.getState().items, cloudStore.getItems(), SEED_IDS);
+      if (!tryBeginSave(saveLock)) return;
+      const upload = planDeviceUpload(
+        store.getState().items,
+        cloudStore.getItems(),
+        SEED_IDS,
+        seedFile.items as Dajare[],
+      );
       const shown = ui.panel.sendIds.join('\n');
       const now = upload.send.map((item) => item.id).join('\n');
       if (shown !== now) {
+        endSave(saveLock);
         ui.panel = { kind: 'upload-local', sendIds: upload.send.map((item) => item.id) };
         panel.innerHTML = confirmUploadPanel(upload);
         showToast('共有DBが変わったので、件数を見直してください');
         return;
       }
       if (upload.send.length === 0) {
+        endSave(saveLock);
         showToast('新しく送る紙はありません');
         return;
       }
-      void cloudStore.bulkImport(upload.send, gate.user).then((result) => {
-        if (shouldMarkUploaded(result)) window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
-        showToast(result.error ?? `${result.added}件を共有DBへ送りました`);
-        closePanel();
-        renderCloudNotes();
-      });
+      const sendButton = panel.querySelector<HTMLButtonElement>('[data-action="confirm-upload"]');
+      if (sendButton) sendButton.disabled = true;
+      void cloudStore
+        .bulkImport(upload.send, gate.user)
+        .then((result) => {
+          if (shouldMarkUploaded(result)) window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
+          showToast(result.error ?? `${result.added}件を共有DBへ送りました`);
+          closePanel();
+          renderCloudNotes();
+        })
+        .finally(() => endSave(saveLock));
       return;
     }
     if (action === 'load-samples') {
@@ -695,42 +726,69 @@ export function mount(
       return;
     }
     if (action === 'commit-import' && ui.panel.kind === 'import') {
+      if (!tryBeginSave(saveLock)) return;
       const decisions: ImportDecisions = {
         idActions: ui.idActions,
         acceptTextSceneIds: ui.acceptDupes,
       };
+      const blockSeed = cloudStore?.migrationDone() ? SEED_IDS : undefined;
       const prepared = prepareImportCommit(
         active().getItems(),
         ui.panel.incoming,
         ui.panel.plan,
         decisions,
+        blockSeed,
       );
       if (prepared.stale) {
+        endSave(saveLock);
         ui.idActions = {};
         ui.acceptDupes = [];
         ui.panel = { kind: 'import', plan: prepared.plan, incoming: ui.panel.incoming };
-        panel.innerHTML = importPanel(prepared.plan);
+        panel.innerHTML = importPanel(
+          prepared.plan,
+          prepared.plan.fresh.filter((item) => blockSeed?.has(item.id)).length,
+        );
         showToast('中身が変わったので、確認をやり直してください');
         return;
       }
       if (gate.mode === 'cloud' && cloudStore) {
         if (!gate.user) {
+          endSave(saveLock);
           showToast('編集者だけが共有できます');
           return;
         }
-        void commitCloud(cloudStore, ui.panel.incoming, prepared, gate.user).then((result) => {
-          if ('error' in result && result.error) {
-            showToast(result.error);
-            return;
-          }
-          showToast(
-            `${result.added}件足して、${result.overwritten}件上書き、${result.skipped}件スキップしました`,
-          );
-          closePanel();
-          renderResults();
-        });
+        const importButton = panel.querySelector<HTMLButtonElement>(
+          '[data-action="commit-import"]',
+        );
+        if (importButton) importButton.disabled = true;
+        void commitCloud(cloudStore, ui.panel.incoming, prepared, gate.user)
+          .then((result) => {
+            if (result.error) {
+              showToast(result.error);
+              if (importButton) importButton.disabled = false;
+              return;
+            }
+            const seedNote = result.seedSkipped
+              ? `消した見本 ${result.seedSkipped}件は戻していません。`
+              : '';
+            if (result.changed.length) {
+              panel.innerHTML = changedAfterConfirmPanel(result.changed);
+              showToast(
+                `${result.changed.length}件は、確認のあとで直されていたので上書きしませんでした。${seedNote}`,
+              );
+              renderResults();
+              return;
+            }
+            showToast(
+              `${result.added}件足して、${result.overwritten}件上書き、${result.skipped}件スキップしました。${seedNote}`,
+            );
+            closePanel();
+            renderResults();
+          })
+          .finally(() => endSave(saveLock));
         return;
       }
+      endSave(saveLock);
       const result = store.commitImport(ui.panel.incoming, decisions);
       if ('error' in result) {
         showToast(result.error);
@@ -812,7 +870,10 @@ export function mount(
     ui.idActions = {};
     ui.acceptDupes = [];
     ui.panel = { kind: 'import', plan, incoming: preview.items };
-    panel.innerHTML = importPanel(plan);
+    const seedSkipped = cloudStore?.migrationDone()
+      ? plan.fresh.filter((item) => SEED_IDS.has(item.id)).length
+      : 0;
+    panel.innerHTML = importPanel(plan, seedSkipped);
     openPanel();
   };
 
@@ -832,12 +893,22 @@ export function mount(
         '<p>初期データの移行が終わっていません。途中まで入っているときは、足りない分だけ足します。</p><button type="button" data-action="seed-cloud">初期データを共有DBに入れる</button>',
       );
     }
+    const uploadPlan = planDeviceUpload(
+      store.getState().items,
+      cloudStore.getItems(),
+      SEED_IDS,
+      seedFile.items as Dajare[],
+    );
     if (
-      hasOwnDeviceData(store.getState().items, SEED_IDS) &&
+      (hasOwnDeviceData(store.getState().items, SEED_IDS) || uploadPlan.editedSeed > 0) &&
       !window.localStorage.getItem(LOCAL_UPLOAD_KEY)
     ) {
+      const lead =
+        uploadPlan.send.length === 0
+          ? '<p>書き直した見本があります。共有DBへは送りません。</p>'
+          : '<p>この端末だけで書いた紙があります。</p>';
       notes.push(
-        '<p>この端末だけで書いた紙があります。</p><button type="button" data-action="upload-local">この端末のデータを共有DBへ送る</button>',
+        `${lead}<button type="button" data-action="upload-local">この端末のデータを共有DBへ送る</button>`,
       );
     }
     slot.innerHTML = notes.length ? `<div class="cloud-note">${notes.join('')}</div>` : '';
@@ -887,49 +958,6 @@ export function mount(
   renderChoices();
   renderResults();
   syncChrome();
-}
-
-function draftOf(item: Dajare): DajareDraft {
-  return {
-    text: item.text,
-    scene: item.scene,
-    addedAt: item.addedAt,
-    addedAtNote: item.addedAtNote,
-    reading: item.reading,
-    source: item.source,
-    rating: item.rating,
-    favorite: item.favorite,
-    tags: item.tags,
-    speakers: item.speakers,
-    memo: item.memo,
-  };
-}
-
-async function commitCloud(
-  cloud: DajareStore,
-  incoming: Dajare[],
-  write: { createIds: string[]; updateIds: string[] },
-  actor: Actor,
-): Promise<{ added: number; overwritten: number; skipped: number; error?: string }> {
-  const byId = new Map(incoming.map((item) => [item.id, item]));
-  let added = 0;
-  let overwritten = 0;
-  const skipped = incoming.length - write.createIds.length - write.updateIds.length;
-  for (const id of write.updateIds) {
-    const item = byId.get(id);
-    if (!item) return { added, overwritten, skipped, error: '見つかりませんでした' };
-    const result = await cloud.update(id, draftOf(item), actor);
-    if (!result.ok) return { added, overwritten, skipped, error: result.error };
-    overwritten += 1;
-  }
-  for (const id of write.createIds) {
-    const item = byId.get(id);
-    if (!item) return { added, overwritten, skipped, error: '見つかりませんでした' };
-    const result = await cloud.create(draftOf(item), actor, id);
-    if (!result.ok) return { added, overwritten, skipped, error: result.error };
-    added += 1;
-  }
-  return { added, overwritten, skipped };
 }
 
 function chipHtml(id: string, values: string[]): string {

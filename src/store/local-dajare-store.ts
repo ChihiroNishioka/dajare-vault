@@ -29,6 +29,7 @@ export function adaptLocalStore(inner: Store): DajareStore {
     },
     getItems: () => inner.getState().items,
     migrationPending: () => false,
+    migrationDone: () => false,
     readError: () => null,
     async create(draft, actor, id): Promise<WriteResult> {
       const result = inner.add(draft, { actor, id });
@@ -37,7 +38,7 @@ export function adaptLocalStore(inner: Store): DajareStore {
       }
       return { ok: true, item: result.item };
     },
-    async update(id, draft, actor): Promise<WriteResult> {
+    async update(id, draft, actor, _options): Promise<WriteResult> {
       const result = inner.update(id, draft, { actor });
       if (!result.ok) {
         return { ok: false, error: result.errors[0]?.message, errors: result.errors };

@@ -5,6 +5,13 @@ export interface WriteResult {
   item?: Dajare;
   error?: string;
   errors?: { field: string; message: string }[];
+  /** 印がある見本、または確認のあとで直されていた紙。書かなかった。 */
+  skipped?: 'seed' | 'changed';
+}
+
+export interface UpdateOptions {
+  /** 確認画面で見た updatedAt。違っていたら上書きしない。 */
+  expectedUpdatedAt?: string;
 }
 
 export interface ImportTally {
@@ -19,9 +26,16 @@ export interface DajareStore {
   getItems(): Dajare[];
   /** 共有DBの初期移行が終わっていないとき true。ローカルは常に false。 */
   migrationPending(): boolean;
+  /** meta/seedMigration があるとき true。 */
+  migrationDone(): boolean;
   readError(): string | null;
   create(draft: DajareDraft, actor: Actor | null, id?: string): Promise<WriteResult>;
-  update(id: string, draft: DajareDraft, actor: Actor | null): Promise<WriteResult>;
+  update(
+    id: string,
+    draft: DajareDraft,
+    actor: Actor | null,
+    options?: UpdateOptions,
+  ): Promise<WriteResult>;
   remove(id: string): Promise<WriteResult>;
   /** すでにある id は作らない。既存の本文は上書きしない。 */
   bulkImport(items: Dajare[], actor: Actor): Promise<ImportTally>;
