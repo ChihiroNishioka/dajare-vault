@@ -1,5 +1,12 @@
 export type Rating = 1 | 2 | 3 | 4 | 5;
 
+/** Google アカウントなど、誰が書いたかを残すときの最小情報。 */
+export interface Actor {
+  uid: string;
+  email: string;
+  name: string;
+}
+
 /** 駄洒落1件。追加日が分からないときは addedAt を null にし、今日の日付では埋めない。 */
 export interface Dajare {
   id: string;
@@ -17,6 +24,10 @@ export interface Dajare {
   speakers: string[];
   updatedAt: string;
   memo: string;
+  /** 共有DBに入れたときだけ付く。ローカルだけの件にはない。 */
+  createdAt?: string;
+  createdBy?: Actor | null;
+  updatedBy?: Actor | null;
 }
 
 export interface VaultFile {

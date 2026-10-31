@@ -134,7 +134,45 @@ export function coerceItem(
     return { ok: false, error: `items[${index}] の更新日時が不正です` };
   }
   const updatedAt = typeof row.updatedAt === 'string' ? row.updatedAt : toUtcSeconds(new Date());
-  return { ok: true, item: { ...validated.value, id, updatedAt } };
+  const createdBy = readActor(row.createdBy, index, 'createdBy');
+  if (!createdBy.ok) return createdBy;
+  const updatedBy = readActor(row.updatedBy, index, 'updatedBy');
+  if (!updatedBy.ok) return updatedBy;
+  const createdAt = asString(row.createdAt, 'createdAt', '');
+  if (!createdAt.ok) return { ok: false, error: `items[${index}]: ${createdAt.error}` };
+  return {
+    ok: true,
+    item: {
+      ...validated.value,
+      id,
+      updatedAt,
+      ...(createdAt.value ? { createdAt: createdAt.value } : {}),
+      ...(createdBy.actor ? { createdBy: createdBy.actor } : {}),
+      ...(updatedBy.actor ? { updatedBy: updatedBy.actor } : {}),
+    },
+  };
+}
+
+function readActor(
+  value: unknown,
+  index: number,
+  field: string,
+):
+  | { ok: true; actor: null | { uid: string; email: string; name: string } }
+  | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, actor: null };
+  if (!value || typeof value !== 'object') {
+    return { ok: false, error: `items[${index}] の ${field} が不正です` };
+  }
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.uid !== 'string' ||
+    typeof row.email !== 'string' ||
+    typeof row.name !== 'string'
+  ) {
+    return { ok: false, error: `items[${index}] の ${field} が不正です` };
+  }
+  return { ok: true, actor: { uid: row.uid, email: row.email, name: row.name } };
 }
 
 export function parseVault(

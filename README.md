@@ -10,6 +10,10 @@
 
 GitHub Pages を有効にすると、ビルド済みの JavaScript ごと、この初期データは URL を知っている人から見えます。リポジトリを public にするかどうかと、Pages をオンにするかどうかは、その点を確認してから決めてください。この README の手順だけでは公開されません。
 
+## 家族で共有する
+
+Firebase（Google ログインと Firestore）を足すと、URL を知っている人は誰でも読め、許可した Google アカウントだけが追加・編集・削除できます。設定の手順は [docs/firebase-setup.md](docs/firebase-setup.md) です。`src/firebase-config.ts` が空のあいだは、今までどおりその端末の中だけに保存します。
+
 ## 開発
 
 ```bash

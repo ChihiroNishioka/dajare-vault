@@ -7,3 +7,6 @@ screenshots
 *.local
 .env
 .env.*
+firebase-debug.log
+firestore-debug.log
+.firebase

@@ -130,6 +130,42 @@ h1 {
   font-size: 0.92rem;
 }
 
+.account {
+  display: flex;
+  align-items: center;
+}
+.who {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  color: var(--quiet);
+  font-size: 0.82rem;
+}
+.who b {
+  font-family: var(--font-title);
+  font-weight: 500;
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+.byline {
+  margin: 0.15rem 0 0;
+  color: var(--quiet);
+  font-size: 0.82rem;
+}
+.byline b {
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: var(--ink);
+}
+.cloud-note {
+  margin: 0 0 0.7rem;
+  padding: 0.7rem 0.8rem;
+  background: #fffdf8;
+  border-left: 4px solid #f5d98b;
+}
+
 .mast-actions {
   display: flex;
   gap: 0.5rem;

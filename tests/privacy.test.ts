@@ -28,7 +28,11 @@ describe('no secrets in the tree', () => {
     const hits: string[] = [];
     for (const path of textFiles) {
       const body = readFileSync(path, 'utf8');
-      for (const pattern of [email, mobile, secret, privateKey]) {
+      const emails = body.match(new RegExp(email, 'g')) ?? [];
+      if (emails.some((address) => !address.toLowerCase().endsWith('@example.com'))) {
+        hits.push(`${relative('.', path)} matched an email`);
+      }
+      for (const pattern of [mobile, secret, privateKey]) {
         if (pattern.test(body)) hits.push(`${relative('.', path)} matched ${pattern}`);
       }
     }

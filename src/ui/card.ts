@@ -16,12 +16,21 @@ function stars(rating: number | null): string {
   return `<span class="rating" aria-label="評価 ${rating}">${bits}</span>`;
 }
 
+function byline(item: Dajare): string {
+  if (!item.createdBy?.name) return '';
+  const wrote = `<p class="byline">書いた人 <b>${escapeHtml(item.createdBy.name)}</b></p>`;
+  const editor = item.updatedBy?.name;
+  if (!editor || editor === item.createdBy.name) return wrote;
+  return `${wrote}<p class="byline">直した人 <b>${escapeHtml(editor)}</b></p>`;
+}
+
 function stamp(): string {
   return `<svg class="oshi" viewBox="0 0 72 72" role="img" aria-label="お気に入り"><path d="M36 8c9.2-.4 18 3.2 22.4 11.2 3.6 6.6 3.2 15.2-.2 22.2-4.2 8.6-12.6 14.8-22.2 15.4-10.4.6-20.2-5.2-24.6-14.4C7.2 33.8 8 22.2 14.2 15.4 19.6 9.4 27.2 8.4 36 8Z" fill="none" stroke="#c45d5b" stroke-width="2.4"/><path d="M37 11c8 .2 15 3.4 18.6 9.6" fill="none" stroke="#e7a09a" stroke-width="1.2"/><text x="36" y="42" text-anchor="middle">推し</text></svg>`;
 }
 
 export class DajareCard extends HTMLElement {
   item: Dajare | null = null;
+  editable = true;
 
   connectedCallback(): void {
     this.render();
@@ -78,6 +87,7 @@ export class DajareCard extends HTMLElement {
         <p class="body">${escapeHtml(item.text)}</p>
         ${reading}
         ${speakers}
+        ${byline(item)}
         <div class="slip-foot">
           ${sceneHtml}
           ${date}
@@ -89,9 +99,11 @@ export class DajareCard extends HTMLElement {
         ${source}
         ${memo}
         <time class="updated" datetime="${escapeHtml(item.updatedAt)}">${escapeHtml(item.updatedAt)}</time>
-        <div class="actions">
-          <button type="button" data-action="edit" data-id="${escapeHtml(item.id)}">編集</button>
-        </div>
+        ${
+          this.editable
+            ? `<div class="actions"><button type="button" data-action="edit" data-id="${escapeHtml(item.id)}">編集</button></div>`
+            : ''
+        }
       </article>
     `;
   }

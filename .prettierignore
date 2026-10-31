@@ -6,3 +6,4 @@ screenshots
 public
 package-lock.json
 src/data/raw_dajare_from_chihiro.txt
+firestore.rules

@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function email() {
+      return signedIn() && request.auth.token.email is string
+        ? request.auth.token.email
+        : '';
+    }
+
+    function isEditor() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && email() != ''
+        && exists(/databases/$(database)/documents/editors/$(email().lower()));
+    }
+
+    function shortList(list) {
+      return list is list && list.size() <= 10;
+    }
+
+    function validActor(actor) {
+      return actor is map
+        && actor.keys().hasOnly(['uid', 'email', 'name'])
+        && actor.uid is string
+        && actor.uid.size() > 0
+        && actor.uid.size() <= 128
+        && actor.email is string
+        && actor.email.size() > 0
+        && actor.email.size() <= 320
+        && actor.name is string
+        && actor.name.size() <= 100;
+    }
+
+    function validDajare(data) {
+      return data.keys().hasOnly([
+          'text', 'scene', 'addedAt', 'addedAtNote', 'reading', 'source',
+          'rating', 'favorite', 'tags', 'speakers', 'memo',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ])
+        && data.text is string
+        && data.text.size() >= 1
+        && data.text.size() <= 200
+        && data.scene is string
+        && data.scene.size() >= 1
+        && data.scene.size() <= 100
+        && (data.addedAt == null || (data.addedAt is string && data.addedAt.matches('^\\d{4}-\\d{2}-\\d{2}$')))
+        && data.addedAtNote is string
+        && data.addedAtNote.size() <= 80
+        && data.reading is string
+        && data.reading.size() <= 200
+        && data.source is string
+        && data.source.size() <= 100
+        && data.memo is string
+        && data.memo.size() <= 500
+        && (data.rating == null || (data.rating is int && data.rating >= 1 && data.rating <= 5))
+        && data.favorite is bool
+        && shortList(data.tags)
+        && shortList(data.speakers)
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time
+        && validActor(data.createdBy)
+        && validActor(data.updatedBy);
+    }
+
+    function sameAuthor() {
+      return request.resource.data.createdBy.uid == request.auth.uid
+        && request.resource.data.createdBy.email.lower() == email().lower()
+        && request.resource.data.updatedBy.uid == request.auth.uid
+        && request.resource.data.updatedBy.email.lower() == email().lower()
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /dajare/{id} {
+      allow read: if true;
+      allow create: if isEditor() && validDajare(request.resource.data) && sameAuthor();
+      allow update: if isEditor()
+        && validDajare(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedBy.uid == request.auth.uid
+        && request.resource.data.updatedBy.email.lower() == email().lower()
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isEditor();
+    }
+
+    match /editors/{emailId} {
+      allow get: if signedIn() && email() != '' && email().lower() == emailId;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+  }
+}

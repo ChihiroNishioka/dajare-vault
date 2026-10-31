@@ -108,7 +108,7 @@ export function formPanel(
   `;
 }
 
-export function settingsPanel(prompt: boolean, canShare: boolean): string {
+export function settingsPanel(prompt: boolean, canShare: boolean, canImport = true): string {
   return `
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <header class="sheet-head">
@@ -122,7 +122,7 @@ export function settingsPanel(prompt: boolean, canShare: boolean): string {
           <div class="sheet-actions">
             <button type="button" class="primary" data-action="export">書き出す</button>
             ${canShare ? '<button type="button" data-action="share">共有シートで渡す</button>' : ''}
-            <button type="button" data-action="pick-import">読み込む</button>
+            ${canImport ? '<button type="button" data-action="pick-import">読み込む</button>' : '<p>閲覧だけなので、書き出しだけできます。</p>'}
           </div>
           <input id="import-file" type="file" accept="application/json,.json" hidden />
         </section>
