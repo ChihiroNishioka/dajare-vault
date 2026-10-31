@@ -11,11 +11,12 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { CLOUD_NOT_READY } from './messages';
+import { nameRefreshPatch, nameRefreshTargets } from './refresh-names';
 import { SEED_IDS } from '../data/seed-ids';
 import { timestampToIso } from '../domain/time';
 import { validateDraft } from '../domain/validate';
 import type { Actor, Dajare, DajareDraft } from '../types';
-import type { DajareStore, ImportTally } from '../store/dajare-store';
+import type { DajareStore, ImportTally, NameRefreshResult } from '../store/dajare-store';
 
 const COLLECTION = 'dajare';
 const MIGRATION_PATH = ['meta', 'seedMigration'] as const;
@@ -137,6 +138,37 @@ function failureMessage(error: unknown, fallback: string): string {
   const code = errorCode(error);
   if (code === 'permission-denied') return fallback;
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/** 1件ずつ読み直す。すでに同じ名前なら書かない。本文や日時は送らない。 */
+async function refreshOneName(
+  db: Firestore,
+  id: string,
+  person: Actor,
+): Promise<'updated' | 'skipped'> {
+  const ref = doc(db, COLLECTION, id);
+  let last: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return 'skipped';
+        const data = snap.data();
+        const patch = nameRefreshPatch(actorOf(data.createdBy), actorOf(data.updatedBy), person);
+        if (!patch) return 'skipped';
+        const write: { createdBy?: Actor; updatedBy?: Actor } = {};
+        if (patch.createdBy) write.createdBy = patch.createdBy;
+        if (patch.updatedBy) write.updatedBy = patch.updatedBy;
+        tx.update(ref, write);
+        return 'updated';
+      });
+    } catch (error) {
+      last = error;
+      const code = errorCode(error);
+      if (code !== 'aborted' && code !== 'failed-precondition') throw error;
+    }
+  }
+  throw last;
 }
 
 export function createFirestoreStore(db: Firestore, actor: () => Actor | null): DajareStore {
@@ -327,6 +359,25 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     },
     bulkImport(incoming, person) {
       return importMissing(incoming, person);
+    },
+    async refreshOwnNames(person, onProgress) {
+      const ids = nameRefreshTargets(items, person).map((item) => item.id);
+      let updated = 0;
+      let skipped = 0;
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          const outcome = await refreshOneName(db, id, person);
+          if (outcome === 'updated') updated += 1;
+          else skipped += 1;
+        } catch {
+          failed += 1;
+        }
+        onProgress?.(updated + skipped + failed, ids.length);
+      }
+      const result: NameRefreshResult = { updated, skipped, failed };
+      if (failed > 0) result.error = '表示をそろえられませんでした';
+      return result;
     },
     async migrateSeed(incoming, person) {
       const marker = doc(db, ...MIGRATION_PATH);

@@ -53,6 +53,9 @@ export function adaptLocalStore(inner: Store): DajareStore {
     },
     bulkImport,
     migrateSeed: (items, actor) => bulkImport(items, actor),
+    async refreshOwnNames() {
+      return { updated: 0, skipped: 0, failed: 0 };
+    },
   };
 }
 

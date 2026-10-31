@@ -20,6 +20,13 @@ export interface ImportTally {
   error?: string;
 }
 
+export interface NameRefreshResult {
+  updated: number;
+  skipped: number;
+  failed: number;
+  error?: string;
+}
+
 /** ローカル保存と共有DBで同じ操作に見せるための窓口。呼び出し側は同期・非同期を区別しない。 */
 export interface DajareStore {
   subscribe(listener: (items: Dajare[]) => void): () => void;
@@ -44,4 +51,12 @@ export interface DajareStore {
    * 印がすでにあるときは何も書かない（消した初期データは戻さない）。
    */
   migrateSeed(items: Dajare[], actor: Actor): Promise<ImportTally>;
+  /**
+   * 自分の uid の表示名だけを、いまの publicName に書き直す。
+   * 本文や日時は変えない。読み直してすでに同じなら書かない。
+   */
+  refreshOwnNames(
+    actor: Actor,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<NameRefreshResult>;
 }

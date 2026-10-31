@@ -175,11 +175,50 @@ service cloud.firestore {
           ]);
       }
 
+      // Normal edits keep createdBy immutable. This branch is only for rewriting
+      // the caller's own display name after editors/<email>.publicName changes.
+      // updatedAt and every other field stay as they are. It is evaluated only
+      // when the diff is confined to the actor fields, so a content edit does
+      // not also pay for it (expression budget).
+      function actorKeysOnly() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return changed.size() > 0
+          && changed.hasOnly(['createdBy', 'updatedBy']);
+      }
+
+      function refreshedOwnActor(before, after, publicName) {
+        return validActor(before)
+          && validActor(after)
+          && before.uid == request.auth.uid
+          && after.uid == before.uid
+          && after.name == publicName;
+      }
+
+      function validNameRefresh() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let publicName = get(
+          /databases/$(database)/documents/editors/$(request.auth.token.email.lower())
+        ).data.publicName;
+        return (!changed.hasAny(['createdBy'])
+            || refreshedOwnActor(
+              resource.data.createdBy,
+              request.resource.data.createdBy,
+              publicName
+            ))
+          && (!changed.hasAny(['updatedBy'])
+            || refreshedOwnActor(
+              resource.data.updatedBy,
+              request.resource.data.updatedBy,
+              publicName
+            ));
+      }
+
       allow get, list: if true;
       // resource is null only on create. Guard so a write does not pay for
       // both validCreate and validUpdate (that also blows the expression budget).
       allow create: if isEditor() && resource == null && validCreate();
-      allow update: if isEditor() && resource != null && validUpdate();
+      allow update: if isEditor() && resource != null
+        && (actorKeysOnly() ? validNameRefresh() : validUpdate());
 
       // Any current editor may permanently delete any entry.
       // Hard deletion does not retain an attribution history or tombstone.

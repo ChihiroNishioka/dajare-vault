@@ -366,6 +366,164 @@ describe.skipIf(!emulatorUp)('firestore rules', () => {
     await assertFails(setDoc(doc(db, 'meta/other'), { doneAt: serverTimestamp() }));
   });
 
+  async function renamePublicName(publicName: string): Promise<void> {
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'editors/editor@example.com'), { publicName });
+    });
+  }
+
+  it('自分の表示名だけを、いまの publicName にそろえられる', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(210);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    const before = await getDoc(ref);
+    await renamePublicName('まひろ');
+    await assertSucceeds(
+      updateDoc(ref, {
+        createdBy: { uid: 'editor-uid', name: 'まひろ' },
+        updatedBy: { uid: 'editor-uid', name: 'まひろ' },
+      }),
+    );
+    const after = await getDoc(ref);
+    expect(after.data()?.text).toBe('布団がふっとんだ');
+    expect(after.data()?.scene).toBe(before.data()?.scene);
+    expect(after.data()?.memo).toBe(before.data()?.memo);
+    expect(after.data()?.createdAt.isEqual(before.data()?.createdAt)).toBe(true);
+    expect(after.data()?.updatedAt.isEqual(before.data()?.updatedAt)).toBe(true);
+    expect(after.data()?.createdBy).toEqual({ uid: 'editor-uid', name: 'まひろ' });
+    expect(after.data()?.updatedBy).toEqual({ uid: 'editor-uid', name: 'まひろ' });
+  });
+
+  it('表示名のそろえは、変わった側だけでも許される', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(211);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await renamePublicName('まひろ');
+    await assertSucceeds(updateDoc(ref, { createdBy: { uid: 'editor-uid', name: 'まひろ' } }));
+    const after = await getDoc(ref);
+    expect(after.data()?.createdBy).toEqual({ uid: 'editor-uid', name: 'まひろ' });
+    expect(after.data()?.updatedBy).toEqual({ uid: 'editor-uid', name: '編集者' });
+    expect(after.data()?.text).toBe('布団がふっとんだ');
+  });
+
+  it('他人の書いた人は、表示名をそろえる対象にできない', async () => {
+    const id = seedId(212);
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), `dajare/${id}`), {
+        ...entry(id),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        createdBy: { uid: 'other-uid', name: 'ほかの人' },
+        updatedBy: { uid: 'other-uid', name: 'ほかの人' },
+      });
+    });
+    const db = editorAuth().firestore();
+    await renamePublicName('まひろ');
+    await assertFails(
+      updateDoc(doc(db, `dajare/${id}`), {
+        createdBy: { uid: 'other-uid', name: 'まひろ' },
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(db, `dajare/${id}`), {
+        createdBy: { uid: 'editor-uid', name: 'まひろ' },
+      }),
+    );
+  });
+
+  it('表示名が publicName と違うそろえは拒否される', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(213);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await renamePublicName('まひろ');
+    await assertFails(
+      updateDoc(ref, {
+        createdBy: { uid: 'editor-uid', name: '別人' },
+        updatedBy: { uid: 'editor-uid', name: '別人' },
+      }),
+    );
+  });
+
+  it('表示名をそろえるときに uid は変えられない', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(214);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await renamePublicName('まひろ');
+    await assertFails(
+      updateDoc(ref, {
+        createdBy: { uid: 'editor-uid-2', name: 'まひろ' },
+      }),
+    );
+  });
+
+  it('表示名と一緒に本文や日時は変えられない', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(215);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await renamePublicName('まひろ');
+    await assertFails(
+      updateDoc(ref, {
+        text: '書き換えた',
+        createdBy: { uid: 'editor-uid', name: 'まひろ' },
+        updatedBy: { uid: 'editor-uid', name: 'まひろ' },
+      }),
+    );
+    await assertFails(
+      updateDoc(ref, {
+        updatedAt: serverTimestamp(),
+        createdBy: { uid: 'editor-uid', name: 'まひろ' },
+      }),
+    );
+    const after = await getDoc(ref);
+    expect(after.data()?.text).toBe('布団がふっとんだ');
+    expect(after.data()?.createdBy).toEqual({ uid: 'editor-uid', name: '編集者' });
+  });
+
+  it('編集者でない人は表示名をそろえられない', async () => {
+    const id = seedId(216);
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), `dajare/${id}`), {
+        ...entry(id),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+    const stranger = env
+      .authenticatedContext('stranger-uid', {
+        email: 'stranger@example.com',
+        email_verified: true,
+        firebase: { sign_in_provider: 'google.com' },
+      })
+      .firestore();
+    await assertFails(
+      updateDoc(doc(stranger, `dajare/${id}`), {
+        createdBy: { uid: 'editor-uid', name: 'まひろ' },
+      }),
+    );
+  });
+
+  it('未ログインでは表示名をそろえられない', async () => {
+    const id = seedId(217);
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), `dajare/${id}`), {
+        ...entry(id),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+    const db = env.unauthenticatedContext().firestore();
+    await assertFails(
+      updateDoc(doc(db, `dajare/${id}`), {
+        createdBy: { uid: 'editor-uid', name: 'まひろ' },
+      }),
+    );
+  });
+
   it('それ以外のパスは拒否される', async () => {
     const db = editorAuth().firestore();
     await assertFails(getDoc(doc(db, 'secrets/one')));
@@ -555,5 +713,96 @@ describe.skipIf(!emulatorUp)('seed migration', () => {
     expect(one.skipped + two.skipped).toBe(2);
     expect(await storedText(first.id)).toBe('同時A');
     expect(await storedText(second.id)).toBe('同時B');
+  });
+});
+
+describe.skipIf(!emulatorUp)('display name refresh', () => {
+  async function raw(id: string): Promise<Record<string, unknown> | null> {
+    let data: Record<string, unknown> | null = null;
+    await env.withSecurityRulesDisabled(async (context) => {
+      const snap = await getDoc(doc(context.firestore(), `dajare/${id}`));
+      data = snap.exists() ? snap.data() : null;
+    });
+    return data;
+  }
+
+  function millis(value: unknown): number | null {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toMillis' in value &&
+      typeof value.toMillis === 'function'
+    ) {
+      return value.toMillis();
+    }
+    return null;
+  }
+
+  it('本文と日時を残したまま、自分の表示名だけをそろえる', async () => {
+    const store = createFirestoreStore(
+      editorAuth().firestore() as unknown as Firestore,
+      () => actor,
+    );
+    const ownId = seedId(220);
+    const mixedId = seedId(221);
+    const otherId = seedId(222);
+    const created = await store.create(sampleDraft('元の本文'), actor, ownId);
+    expect(created.ok).toBe(true);
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'editors/editor@example.com'), { publicName: 'まひろ' });
+      await setDoc(doc(db, `dajare/${mixedId}`), {
+        ...entry(mixedId),
+        text: '直した人だけ',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-01-02T00:00:00Z'),
+        createdBy: { uid: 'other-uid', name: 'ほかの人' },
+        updatedBy: { uid: 'editor-uid', name: '編集者' },
+      });
+      await setDoc(doc(db, `dajare/${otherId}`), {
+        ...entry(otherId),
+        text: '他人の紙',
+        createdAt: new Date('2026-03-01T00:00:00Z'),
+        updatedAt: new Date('2026-03-02T00:00:00Z'),
+        createdBy: { uid: 'other-uid', name: 'ほかの人' },
+        updatedBy: { uid: 'other-uid', name: 'ほかの人' },
+      });
+    });
+    await waitFor(
+      () =>
+        store.getItems().some((item) => item.id === ownId) &&
+        store.getItems().some((item) => item.id === mixedId) &&
+        store.getItems().some((item) => item.id === otherId),
+    );
+    const beforeOwn = await raw(ownId);
+    const beforeMixed = await raw(mixedId);
+    const progress: number[] = [];
+    const first = await store.refreshOwnNames({ uid: 'editor-uid', name: 'まひろ' }, (done) => {
+      progress.push(done);
+    });
+    expect(first.error).toBeUndefined();
+    expect(first.updated).toBe(2);
+    expect(first.failed).toBe(0);
+    expect(progress).toEqual([1, 2]);
+    const afterOwn = await raw(ownId);
+    const afterMixed = await raw(mixedId);
+    const afterOther = await raw(otherId);
+    expect(afterOwn?.text).toBe('元の本文');
+    expect(afterOwn?.createdBy).toEqual({ uid: 'editor-uid', name: 'まひろ' });
+    expect(afterOwn?.updatedBy).toEqual({ uid: 'editor-uid', name: 'まひろ' });
+    expect(millis(afterOwn?.createdAt)).toBe(millis(beforeOwn?.createdAt));
+    expect(millis(afterOwn?.updatedAt)).toBe(millis(beforeOwn?.updatedAt));
+    expect(afterMixed?.text).toBe('直した人だけ');
+    expect(afterMixed?.createdBy).toEqual({ uid: 'other-uid', name: 'ほかの人' });
+    expect(afterMixed?.updatedBy).toEqual({ uid: 'editor-uid', name: 'まひろ' });
+    expect(millis(afterMixed?.createdAt)).toBe(millis(beforeMixed?.createdAt));
+    expect(millis(afterMixed?.updatedAt)).toBe(millis(beforeMixed?.updatedAt));
+    expect(afterOther?.text).toBe('他人の紙');
+    expect(afterOther?.createdBy).toEqual({ uid: 'other-uid', name: 'ほかの人' });
+    expect(afterOther?.updatedBy).toEqual({ uid: 'other-uid', name: 'ほかの人' });
+    const second = await store.refreshOwnNames({ uid: 'editor-uid', name: 'まひろ' });
+    expect(second.updated).toBe(0);
+    expect(second.failed).toBe(0);
+    expect(await storedText(ownId)).toBe('元の本文');
   });
 });

@@ -22,6 +22,12 @@ import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
 import { commitCloud } from '../cloud/commit-cloud';
 import { loginFailureMessage } from '../cloud/google-identity';
 import { CLOUD_NOT_READY } from '../cloud/messages';
+import {
+  nameRefreshButtonLabel,
+  nameRefreshProgress,
+  nameRefreshResultMessage,
+  nameRefreshTargets,
+} from '../cloud/refresh-names';
 import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
 import { readHeaderMock, readPreviewActor } from '../session';
 import type { Actor } from '../types';
@@ -98,6 +104,7 @@ export function mount(
     ((container: HTMLElement, onStatus: (code: string) => void) => void) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
   let cloudBootError: string | null = null;
+  let nameRefresh: { done: number; total: number } | null = null;
   const localApi = adaptLocalStore(store);
   const active = (): DajareStore => (gate.mode === 'cloud' && cloudStore ? cloudStore : localApi);
   root.innerHTML = shell();
@@ -676,6 +683,24 @@ export function mount(
       void cloudSignOut?.();
       return;
     }
+    if (action === 'refresh-names' && cloudStore && gate.user && gate.isEditor && !nameRefresh) {
+      const person = gate.user;
+      const total = nameRefreshTargets(cloudStore.getItems(), person).length;
+      if (total === 0) return;
+      nameRefresh = { done: 0, total };
+      renderCloudNotes();
+      void cloudStore
+        .refreshOwnNames(person, (done, all) => {
+          nameRefresh = { done, total: all };
+          renderCloudNotes();
+        })
+        .then((result) => {
+          nameRefresh = null;
+          renderCloudNotes();
+          showToast(nameRefreshResultMessage(result));
+        });
+      return;
+    }
     if (action === 'seed-cloud' && cloudStore && gate.user) {
       void cloudStore.migrateSeed(seedFile.items as Dajare[], gate.user).then((result) => {
         showToast(
@@ -910,6 +935,16 @@ export function mount(
       return;
     }
     const notes: string[] = [];
+    if (nameRefresh) {
+      notes.push(`<p>${escapeHtml(nameRefreshProgress(nameRefresh.done, nameRefresh.total))}</p>`);
+    } else {
+      const staleNames = nameRefreshTargets(cloudStore.getItems(), gate.user);
+      if (staleNames.length > 0) {
+        notes.push(
+          `<p>書いた人の名前が、いまの表示と違います。</p><button type="button" data-action="refresh-names">${escapeHtml(nameRefreshButtonLabel(gate.user.name, staleNames.length))}</button>`,
+        );
+      }
+    }
     if (cloudStore.migrationPending()) {
       notes.push(
         '<p>初期データの移行が終わっていません。途中まで入っているときは、足りない分だけ足します。</p><button type="button" data-action="seed-cloud">初期データを共有DBに入れる</button>',
