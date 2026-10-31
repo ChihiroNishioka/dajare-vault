@@ -1,6 +1,7 @@
 export interface KeyValueStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 export function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage & {
@@ -11,6 +12,9 @@ export function memoryStorage(initial: Record<string, string> = {}): KeyValueSto
     getItem: (key) => (map.has(key) ? (map.get(key) ?? null) : null),
     setItem: (key, value) => {
       map.set(key, value);
+    },
+    removeItem: (key) => {
+      map.delete(key);
     },
     dump: () => Object.fromEntries(map),
   };

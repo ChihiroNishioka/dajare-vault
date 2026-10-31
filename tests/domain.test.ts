@@ -202,6 +202,58 @@ describe('transfer', () => {
     });
   });
 
+  it('rejects a file that repeats an id, and flags text+scene duplicates inside the file', () => {
+    const first = item({ id: seedId(3), text: '同じ', scene: '場面' });
+    const sameId = item({ id: seedId(3), text: '別の本文', scene: '別' });
+    const repeated = parseVault({ schemaVersion: 2, items: [first, sameId] });
+    expect(repeated.ok).toBe(false);
+    if (!repeated.ok) expect(repeated.error).toMatch(/同じID/);
+
+    const twin = item({ id: seedId(4), text: '同じ', scene: '場面' });
+    const plan = planImport([], [first, twin]);
+    expect(plan.fresh).toHaveLength(1);
+    expect(plan.textSceneDupes).toHaveLength(1);
+    const applied = applyImport([], plan, emptyDecisions());
+    expect(applied.items).toHaveLength(1);
+    expect(applied.added).toBe(1);
+    expect(applied.skipped).toBe(1);
+  });
+
+  it('rejects values whose types do not match the fields', () => {
+    const base = {
+      id: sample.id,
+      text: sample.text,
+      scene: sample.scene,
+      addedAt: sample.addedAt,
+      updatedAt: sample.updatedAt,
+    };
+    expect(parseVault({ schemaVersion: 2, items: [{ ...base, favorite: 'false' }] }).ok).toBe(
+      false,
+    );
+    expect(parseVault({ schemaVersion: 2, items: [{ ...base, rating: true }] }).ok).toBe(false);
+    expect(parseVault({ schemaVersion: 2, items: [{ ...base, tags: '朝' }] }).ok).toBe(false);
+    expect(parseVault({ schemaVersion: 2, items: [{ ...base, memo: 123 }] }).ok).toBe(false);
+    expect(parseVault({ schemaVersion: 2, items: [{ ...base, addedAt: 123 }] }).ok).toBe(false);
+    expect(
+      parseVault({
+        schemaVersion: 2,
+        items: [{ ...base, updatedAt: '2025-02-30T99:99:99Z' }],
+      }).ok,
+    ).toBe(false);
+    const tricky = parseVault({
+      schemaVersion: 2,
+      items: [{ ...base, tags: [{ toString: null }] }],
+    });
+    expect(tricky.ok).toBe(false);
+  });
+
+  it('rejects an import that is too large', () => {
+    const many = Array.from({ length: 2001 }, (_, index) =>
+      item({ id: seedId(1000 + index), text: `件${index}`, scene: '場面' }),
+    );
+    expect(parseVault({ schemaVersion: 2, items: many }).ok).toBe(false);
+  });
+
   it('plans id conflicts and text+scene duplicates', () => {
     const existing = [sample];
     const sameId = { ...sample, text: '書き直した' };

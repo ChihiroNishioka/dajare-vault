@@ -29,6 +29,8 @@ export const CURRENT_SCHEMA_VERSION = 2;
 /** 仕様の localStorage キー。中身の schemaVersion とは別に、置き場の名前として固定する。 */
 export const DATA_KEY = 'dajareVault:v1';
 export const META_KEY = 'dajareVault:meta:v1';
+/** 読めなかった保存文字列を退避するキーの接頭辞。後ろに日時を付ける。 */
+export const BROKEN_PREFIX = 'dajareVault:broken:';
 
 export interface VaultMeta {
   lastExportAt: string | null;

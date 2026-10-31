@@ -76,9 +76,21 @@ test('edits a pun and refreshes updatedAt', async ({ page }) => {
   expect(after).toBeTruthy();
 });
 
+test('form fields stay at least 16px so iOS does not zoom', async ({ page }) => {
+  await page.getByRole('button', { name: '追加' }).click();
+  const names = ['text', 'scene', 'reading', 'source', 'addedAtNote', 'memo'];
+  for (const name of names) {
+    const size = await page
+      .locator(`#dajare-form [name="${name}"]`)
+      .evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
+    expect(size).toBeGreaterThanOrEqual(16);
+  }
+});
+
 test('deletes through the confirm dialog and stays gone after reload', async ({ page }) => {
   const card = page.locator('dajare-card', { hasText: '電話に出んわ' });
-  await card.getByRole('button', { name: '削除' }).click();
+  await card.getByRole('button', { name: '編集' }).click();
+  await page.getByRole('button', { name: '削除する' }).click();
   await page.getByRole('button', { name: '削除する' }).click();
   await expect(page.getByText('電話に出んわ')).toHaveCount(0);
   await page.reload();

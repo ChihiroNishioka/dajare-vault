@@ -9,6 +9,7 @@ import {
 import { toUtcSeconds } from '../domain/ids';
 import { validateDraft } from '../domain/validate';
 import {
+  BROKEN_PREFIX,
   DATA_KEY,
   META_KEY,
   type Dajare,
@@ -47,6 +48,8 @@ export interface Store {
     decisions: ImportDecisions,
   ): { added: number; overwritten: number; skipped: number } | { error: string };
   loadSamples(): { added: number; skipped: number };
+  exportBroken(): string | null;
+  reload(): void;
 }
 
 export interface StoreOptions {
@@ -56,6 +59,8 @@ export interface StoreOptions {
 }
 
 const SAVE_FAILED = '保存できませんでした。エクスポートしてください';
+const STORAGE_BLOCKED = 'このブラウザの設定では保存できません';
+const UNREADABLE = '保存データが読めませんでした。書き出したJSONがあれば読み込んでください';
 
 function emptyMeta(): VaultMeta {
   return { lastExportAt: null, changesSinceExport: 0, promptOnChange: false };
@@ -91,7 +96,7 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
 
   const state: StoreState = {
     items: [],
-    meta: readMeta(storage),
+    meta: emptyMeta(),
     loadError: null,
     saveError: null,
   };
@@ -100,18 +105,53 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
     for (const listener of listeners) listener();
   };
 
+  let writesBlocked = false;
+  let brokenRaw: string | null = null;
+
   const persist = (): boolean => {
+    if (writesBlocked) {
+      state.saveError = state.loadError ?? '保存データが読めないので、書き込みを止めています';
+      return false;
+    }
+    let previous: string | null = null;
     try {
-      storage.setItem(
-        DATA_KEY,
-        JSON.stringify({ schemaVersion: seed.schemaVersion, items: state.items }),
-      );
-      storage.setItem(META_KEY, JSON.stringify(state.meta));
-      state.saveError = null;
-      return true;
+      previous = storage.getItem(DATA_KEY);
+    } catch {
+      state.saveError = STORAGE_BLOCKED;
+      return false;
+    }
+    const next = JSON.stringify({ schemaVersion: seed.schemaVersion, items: state.items });
+    try {
+      storage.setItem(DATA_KEY, next);
     } catch {
       state.saveError = SAVE_FAILED;
       return false;
+    }
+    try {
+      storage.setItem(META_KEY, JSON.stringify(state.meta));
+    } catch {
+      try {
+        if (previous === null) storage.removeItem(DATA_KEY);
+        else storage.setItem(DATA_KEY, previous);
+      } catch {
+        // 戻せないときは、次の読み込みで退避キーを見る。
+      }
+      state.saveError = SAVE_FAILED;
+      return false;
+    }
+    state.saveError = null;
+    return true;
+  };
+
+  const rememberBroken = (raw: string, message: string): void => {
+    writesBlocked = true;
+    brokenRaw = raw;
+    state.loadError = message;
+    state.items = [];
+    try {
+      storage.setItem(`${BROKEN_PREFIX}${toUtcSeconds(now()).replaceAll(':', '')}`, raw);
+    } catch {
+      // 退避に失敗しても、メモリ上の原文は書き出せる。元のキーは上書きしない。
     }
   };
 
@@ -133,28 +173,48 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
     state.meta = { ...state.meta, changesSinceExport: state.meta.changesSinceExport + 1 };
   };
 
-  const raw = storage.getItem(DATA_KEY);
-  if (!raw) {
-    state.items = cloneSeed(seed);
-    persist();
-  } else {
+  const load = (): void => {
+    let raw: string | null;
+    try {
+      state.meta = readMeta(storage);
+      raw = storage.getItem(DATA_KEY);
+    } catch {
+      writesBlocked = true;
+      brokenRaw = null;
+      state.items = [];
+      state.loadError = STORAGE_BLOCKED;
+      return;
+    }
+    if (raw === null) {
+      writesBlocked = false;
+      brokenRaw = null;
+      state.loadError = null;
+      state.items = cloneSeed(seed);
+      persist();
+      return;
+    }
     try {
       const parsed = parseVault(JSON.parse(raw) as unknown);
       if (!parsed.ok) {
-        state.loadError = parsed.error;
-      } else {
-        state.items = parsed.items;
-        if (
-          !raw.includes(`"schemaVersion":${seed.schemaVersion}`) &&
-          !raw.includes(`"schemaVersion": ${seed.schemaVersion}`)
-        ) {
-          persist();
-        }
+        rememberBroken(raw, parsed.error);
+        return;
+      }
+      writesBlocked = false;
+      brokenRaw = null;
+      state.loadError = null;
+      state.items = parsed.items;
+      if (
+        !raw.includes(`"schemaVersion":${seed.schemaVersion}`) &&
+        !raw.includes(`"schemaVersion": ${seed.schemaVersion}`)
+      ) {
+        persist();
       }
     } catch {
-      state.loadError = '保存データが読めませんでした。書き出したJSONがあれば読み込んでください';
+      rememberBroken(raw, UNREADABLE);
     }
-  }
+  };
+
+  load();
 
   return {
     getState: () => state,
@@ -212,9 +272,13 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       });
     },
     previewImport(rawInput) {
-      const parsed = parseVault(rawInput);
-      if (!parsed.ok) return parsed;
-      return { ...parsed, plan: planImport(state.items, parsed.items) };
+      try {
+        const parsed = parseVault(rawInput);
+        if (!parsed.ok) return parsed;
+        return { ...parsed, plan: planImport(state.items, parsed.items) };
+      } catch {
+        return { ok: false as const, error: 'JSONの形が正しくありません' };
+      }
     },
     commitImport(incoming, decisions) {
       const plan = planImport(state.items, incoming);
@@ -244,6 +308,11 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       if (!saved)
         return { added: 0, skipped: plan.idConflicts.length + plan.textSceneDupes.length };
       return { added: result.added, skipped: result.skipped };
+    },
+    exportBroken: () => brokenRaw,
+    reload() {
+      load();
+      notify();
     },
   };
 }

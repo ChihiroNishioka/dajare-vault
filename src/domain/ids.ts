@@ -29,7 +29,10 @@ export function isIsoDate(value: string): boolean {
 }
 
 export function isUtcSeconds(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return false;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return false;
+  return new Date(parsed).toISOString().replace(/\.\d{3}Z$/, 'Z') === value;
 }
 
 export function hashId(id: string): number {

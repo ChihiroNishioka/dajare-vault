@@ -38,15 +38,28 @@ export class DajareCard extends HTMLElement {
     this.dataset.cut = String(n % 4);
     this.dataset.id = item.id;
 
+    const tapeShift = (n % 17) + 8;
+    const tapeWidth = (2.2 + (n % 5) * 0.4).toFixed(2);
+    const tapeTilt = (n % 7) - 3;
+    this.style.setProperty('--tape-left', `${tapeShift}%`);
+    this.style.setProperty('--tape-width', `${tapeWidth}rem`);
+    this.style.setProperty('--tape-tilt', `${tapeTilt}deg`);
+
     const when = addedLabel(item);
-    const date = when.unknown
-      ? `<p class="when is-unknown">${escapeHtml(when.text)}</p>`
-      : `<p class="when"><time datetime="${escapeHtml(item.addedAt ?? '')}">${escapeHtml(when.text)}</time></p>`;
+    const date =
+      item.addedAt !== null
+        ? `<p class="when"><time datetime="${escapeHtml(item.addedAt)}">${escapeHtml(when.text)}</time></p>`
+        : item.addedAtNote
+          ? `<p class="when is-unknown">${escapeHtml(item.addedAtNote)}</p>`
+          : '';
+    const sceneHtml =
+      item.scene && item.scene !== '不明'
+        ? `<p class="scene"><span>場面</span> <em>${escapeHtml(item.scene)}</em></p>`
+        : '';
     const speakers =
       item.speakers.length > 0
         ? `<p class="speakers"><span>言った人</span> ${item.speakers.map((name) => `<b>${escapeHtml(name)}</b>`).join(' ')}</p>`
         : '';
-    const sceneClass = item.scene === '不明' ? 'scene is-unknown' : 'scene';
     const tags =
       item.tags.length > 0
         ? `<ul class="tags">${item.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join('')}</ul>`
@@ -66,7 +79,7 @@ export class DajareCard extends HTMLElement {
         ${reading}
         ${speakers}
         <div class="slip-foot">
-          <p class="${sceneClass}"><span>場面</span> <em>${escapeHtml(item.scene)}</em></p>
+          ${sceneHtml}
           ${date}
           ${note}
           ${stars(item.rating)}
@@ -78,7 +91,6 @@ export class DajareCard extends HTMLElement {
         <time class="updated" datetime="${escapeHtml(item.updatedAt)}">${escapeHtml(item.updatedAt)}</time>
         <div class="actions">
           <button type="button" data-action="edit" data-id="${escapeHtml(item.id)}">編集</button>
-          <button type="button" data-action="delete" data-id="${escapeHtml(item.id)}">削除</button>
         </div>
       </article>
     `;

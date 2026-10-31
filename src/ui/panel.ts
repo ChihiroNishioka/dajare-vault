@@ -96,6 +96,11 @@ export function formPanel(
         <p class="field-error" data-error-for="form"></p>
         <div class="sheet-actions">
           <button type="button" class="primary" data-action="save" disabled>保存</button>
+          ${
+            mode === 'edit' && item
+              ? `<button type="button" class="danger" data-action="delete" data-id="${escapeHtml(item.id)}">削除する</button>`
+              : ''
+          }
           <button type="button" data-action="close-panel">やめる</button>
         </div>
       </form>

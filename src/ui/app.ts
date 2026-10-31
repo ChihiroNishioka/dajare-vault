@@ -8,7 +8,7 @@ import {
 import { LIMITS, READING_RE } from '../domain/validate';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import { createStore, type Store } from '../store/store';
-import type { Dajare, DajareDraft } from '../types';
+import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
 import { defineCard, type DajareCard } from './card';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
@@ -86,7 +86,17 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     });
     const notice = backupNotice(state.meta, new Date());
     const bits = [notice.text, state.loadError, state.saveError].filter(Boolean);
-    banner.textContent = bits.join(' / ');
+    banner.replaceChildren();
+    const line = document.createElement('span');
+    line.textContent = bits.join(' / ');
+    banner.append(line);
+    if (store.exportBroken()) {
+      const recover = document.createElement('button');
+      recover.type = 'button';
+      recover.dataset.action = 'export-broken';
+      recover.textContent = '読めなかった原文を書き出す';
+      banner.append(recover);
+    }
     banner.classList.toggle(
       'is-warn',
       notice.warn || Boolean(state.saveError) || Boolean(state.loadError),
@@ -252,17 +262,19 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     document.body.append(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const doExport = (): void => {
     const items = store.exportItems();
     const filename = exportFilename(new Date());
     download(filename, serialize(items));
-    store.markExported();
-    showToast('書き出しました');
-    renderResults();
-    if (ui.panel.kind === 'prompt') closePanel();
+    window.setTimeout(() => {
+      store.markExported();
+      showToast('書き出しました');
+      renderResults();
+      if (ui.panel.kind === 'prompt') closePanel();
+    }, 1000);
   };
 
   const doShare = async (): Promise<void> => {
@@ -339,6 +351,8 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
 
   root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && ui.panel.kind !== 'closed') {
+      if (ui.panel.kind === 'form' && formDirty() && !window.confirm('書いた内容を捨てますか？'))
+        return;
       closePanel();
       return;
     }
@@ -477,9 +491,24 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (action === 'confirm-delete' && ui.panel.kind === 'delete') {
-      store.remove(ui.panel.id);
+      const removed = store.remove(ui.panel.id);
+      if (!removed) {
+        showToast(store.getState().saveError ?? '捨てられませんでした');
+        renderResults();
+        return;
+      }
       showToast('捨てました');
       afterWrite();
+      return;
+    }
+    if (action === 'export-broken') {
+      const raw = store.exportBroken();
+      if (!raw) return;
+      download(
+        `dajare-vault-broken-${exportFilename(new Date()).slice('dajare-vault-'.length)}`,
+        raw,
+      );
+      showToast('読めなかった原文を書き出しました');
       return;
     }
     if (action === 'export') {
@@ -547,7 +576,30 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     refreshChips();
   };
 
+  const formDirty = (): boolean => {
+    const panelState = ui.panel;
+    if (panelState.kind !== 'form') return false;
+    const draft = readDraft();
+    if (!draft) return false;
+    if (panelState.mode === 'add') {
+      return Boolean(
+        draft.text.trim() || draft.scene.trim() || draft.memo.trim() || draft.reading.trim(),
+      );
+    }
+    const current = store.getState().items.find((item) => item.id === panelState.id);
+    if (!current) return true;
+    return (
+      draft.text.trim() !== current.text ||
+      draft.scene.trim() !== current.scene ||
+      draft.memo.trim() !== current.memo
+    );
+  };
+
   const readImport = async (file: File): Promise<void> => {
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('ファイルが大きすぎます（5MBまで）');
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(await file.text()) as unknown;
@@ -568,6 +620,14 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   };
 
   store.subscribe(() => {
+    renderResults();
+  });
+  window.addEventListener('storage', (event) => {
+    if (event.key !== null && event.key !== DATA_KEY && event.key !== META_KEY) {
+      return;
+    }
+    store.reload();
+    renderChoices();
     renderResults();
   });
   renderChoices();
@@ -634,7 +694,7 @@ function shell(): string {
           <div class="pin" aria-hidden="true"></div>
           <h2>絞り込み</h2>
           <label>シーンで絞る
-            <input id="scene-filter" type="search" autocomplete="off" />
+            <input id="scene-filter" type="search" autocomplete="off" placeholder="夕飯、通勤中" />
           </label>
           <label>並び替え
             <select id="sort">
@@ -669,7 +729,7 @@ function shell(): string {
           <button type="button" class="filter-close" data-action="toggle-filters">閉じる</button>
         </aside>
         <main>
-          <p id="banner" class="banner"></p>
+          <div id="banner" class="banner"></div>
           <p id="count" class="count-line" data-testid="count"></p>
           <div id="board"></div>
         </main>

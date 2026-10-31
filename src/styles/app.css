@@ -207,6 +207,7 @@ button.texty {
   border-bottom: 1px solid var(--rule);
   border-radius: 0;
   padding: 0.35rem 0.1rem;
+  font-size: 16px;
 }
 
 .search input {
@@ -221,7 +222,7 @@ button.texty {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(15rem, 17.5rem) minmax(0, 1fr);
+  grid-template-columns: minmax(15rem, 16rem) minmax(0, 1fr);
   gap: 1.2rem 1.4rem;
   align-items: start;
 }
@@ -340,6 +341,9 @@ input[type='date']::-webkit-calendar-picker-indicator {
   color: var(--ink);
   border-left-color: var(--ink);
 }
+.banner button {
+  margin-left: 0.6rem;
+}
 
 .count-line {
   margin: 0 0 0.7rem;
@@ -349,7 +353,7 @@ input[type='date']::-webkit-calendar-picker-indicator {
 
 #board {
   columns: 2;
-  column-gap: 1rem;
+  column-gap: 1.25rem;
 }
 
 dajare-card {
@@ -385,11 +389,11 @@ dajare-card[data-cut='3'] .slip {
 .tape {
   position: absolute;
   top: 0;
-  left: 1rem;
-  width: 3.2rem;
+  left: var(--tape-left, 12%);
+  width: var(--tape-width, 3.2rem);
   height: 0.55rem;
   background: var(--tape, var(--butter));
-  transform: rotate(-2deg);
+  transform: rotate(var(--tape-tilt, -2deg));
 }
 
 .body {
@@ -755,7 +759,7 @@ legend {
       0 6px;
   }
   .app {
-    padding: 0.85rem 0.75rem 6rem 0.9rem;
+    padding: 0.85rem 0.75rem calc(6rem + env(safe-area-inset-bottom, 0px)) 0.9rem;
   }
   .layout {
     grid-template-columns: minmax(0, 1fr);
@@ -798,10 +802,24 @@ legend {
     display: inline-flex;
     margin-top: 0.6rem;
   }
+  .actions button,
+  .sheet-actions button,
+  .star-btn,
+  .chip,
+  .tag-pick,
+  .suggest,
+  .filter-open,
+  label.check {
+    min-height: 44px;
+  }
+  .star-btn {
+    width: 44px;
+    height: 44px;
+  }
   .add-button {
     position: fixed;
     right: 0.9rem;
-    bottom: 0.9rem;
+    bottom: calc(0.9rem + env(safe-area-inset-bottom, 0px));
     z-index: 25;
     width: 4.4rem;
     height: 4.4rem;

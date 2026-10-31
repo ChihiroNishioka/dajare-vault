@@ -116,4 +116,70 @@ describe('createStore', () => {
     const store = createStore(memoryStorage(), { seed: tiny });
     expect(store.loadSamples()).toEqual({ added: 0, skipped: 1 });
   });
+
+  it('does not seed or overwrite when saved data cannot be read', () => {
+    const original = JSON.stringify({
+      schemaVersion: 2,
+      items: [{ ...tiny.items[0], text: 'あ'.repeat(201) }],
+    });
+    const cases = [original, JSON.stringify({ schemaVersion: 3, items: tiny.items }), '{', ''];
+    for (const raw of cases) {
+      const storage = memoryStorage({ [DATA_KEY]: raw });
+      const store = createStore(storage, {
+        seed: tiny,
+        uuid: () => seedId(70),
+        now: () => new Date('2026-10-31T00:00:00Z'),
+      });
+      expect(store.getState().loadError).toBeTruthy();
+      expect(store.getState().items).toEqual([]);
+      const added = store.add({
+        text: '足してしまう',
+        scene: '場面',
+        addedAt: null,
+        addedAtNote: '',
+        reading: '',
+        source: '',
+        rating: null,
+        favorite: false,
+        tags: [],
+        speakers: [],
+        memo: '',
+      });
+      expect(added.ok).toBe(false);
+      expect(storage.dump()[DATA_KEY]).toBe(raw);
+      const stashed = Object.entries(storage.dump()).filter(([key]) =>
+        key.startsWith('dajareVault:broken:'),
+      );
+      expect(stashed).toHaveLength(1);
+      expect(stashed[0]?.[1]).toBe(raw);
+      expect(store.exportBroken()).toBe(raw);
+    }
+  });
+
+  it('keeps going when storage itself throws', () => {
+    const storage = memoryStorage();
+    storage.getItem = () => {
+      const error = new Error('blocked');
+      error.name = 'SecurityError';
+      throw error;
+    };
+    const store = createStore(storage, { seed: tiny });
+    expect(store.getState().loadError).toMatch(/保存できません/);
+    expect(store.getState().items).toEqual([]);
+    expect(
+      store.add({
+        text: '書けない',
+        scene: '場面',
+        addedAt: null,
+        addedAtNote: '',
+        reading: '',
+        source: '',
+        rating: null,
+        favorite: false,
+        tags: [],
+        speakers: [],
+        memo: '',
+      }).ok,
+    ).toBe(false);
+  });
 });

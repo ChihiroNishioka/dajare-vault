@@ -37,8 +37,30 @@ export function exportFilename(now: Date): string {
   return `dajare-vault-${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}.json`;
 }
 
-function str(value: unknown): string {
-  return typeof value === 'string' ? value : '';
+export const MAX_IMPORT_ITEMS = 2000;
+export const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+
+function asString(
+  value: unknown,
+  field: string,
+  fallback?: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+  if ((value === undefined || value === null) && fallback !== undefined) {
+    return { ok: true, value: fallback };
+  }
+  if (typeof value !== 'string') return { ok: false, error: `${field} は文字列です` };
+  return { ok: true, value };
+}
+
+function readStringList(
+  value: unknown,
+  field: string,
+): { ok: true; value: string[] } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, value: [] };
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    return { ok: false, error: `${field} は文字列の配列です` };
+  }
+  return { ok: true, value };
 }
 
 export function coerceItem(
@@ -49,24 +71,52 @@ export function coerceItem(
     return { ok: false, error: `items[${index}] がオブジェクトではありません` };
   }
   const row = input as Record<string, unknown>;
-  const ratingRaw = row.rating;
+  const text = asString(row.text, '本文');
+  if (!text.ok) return { ok: false, error: `items[${index}]: ${text.error}` };
+  const scene = asString(row.scene, 'シーン');
+  if (!scene.ok) return { ok: false, error: `items[${index}]: ${scene.error}` };
+  const reading = asString(row.reading, '読み', '');
+  if (!reading.ok) return { ok: false, error: `items[${index}]: ${reading.error}` };
+  const source = asString(row.source, '元ネタ', '');
+  if (!source.ok) return { ok: false, error: `items[${index}]: ${source.error}` };
+  const memo = asString(row.memo, 'メモ', '');
+  if (!memo.ok) return { ok: false, error: `items[${index}]: ${memo.error}` };
+  const addedAtNote = asString(row.addedAtNote, '日付メモ', '');
+  if (!addedAtNote.ok) return { ok: false, error: `items[${index}]: ${addedAtNote.error}` };
+
+  let addedAt: string | null;
+  if (row.addedAt === undefined || row.addedAt === null || row.addedAt === '') addedAt = null;
+  else if (typeof row.addedAt !== 'string') {
+    return { ok: false, error: `items[${index}]: 追加日は文字列です` };
+  } else addedAt = row.addedAt;
+
   let rating: number | null = null;
-  if (ratingRaw !== null && ratingRaw !== undefined && ratingRaw !== '') {
-    rating = typeof ratingRaw === 'number' ? ratingRaw : Number(ratingRaw);
-    if (Number.isNaN(rating)) rating = Number.NaN;
+  if (row.rating !== undefined && row.rating !== null && row.rating !== '') {
+    if (typeof row.rating !== 'number') {
+      return { ok: false, error: `items[${index}]: 評価は数値です` };
+    }
+    rating = row.rating;
   }
+  if (row.favorite !== undefined && typeof row.favorite !== 'boolean') {
+    return { ok: false, error: `items[${index}]: お気に入りは真偽値です` };
+  }
+  const tags = readStringList(row.tags, 'タグ');
+  if (!tags.ok) return { ok: false, error: `items[${index}]: ${tags.error}` };
+  const speakers = readStringList(row.speakers, '言った人');
+  if (!speakers.ok) return { ok: false, error: `items[${index}]: ${speakers.error}` };
+
   const draft: DajareDraft = {
-    text: str(row.text),
-    scene: str(row.scene),
-    addedAt: row.addedAt === null || row.addedAt === '' ? null : str(row.addedAt),
-    addedAtNote: str(row.addedAtNote),
-    reading: str(row.reading),
-    source: str(row.source),
+    text: text.value,
+    scene: scene.value,
+    addedAt,
+    addedAtNote: addedAtNote.value,
+    reading: reading.value,
+    source: source.value,
     rating: rating as DajareDraft['rating'],
-    favorite: Boolean(row.favorite),
-    tags: Array.isArray(row.tags) ? row.tags.map((tag) => String(tag)) : [],
-    speakers: Array.isArray(row.speakers) ? row.speakers.map((name) => String(name)) : [],
-    memo: str(row.memo),
+    favorite: row.favorite === true,
+    tags: tags.value,
+    speakers: speakers.value,
+    memo: memo.value,
   };
   const validated = validateDraft(draft);
   if (!validated.ok) {
@@ -75,10 +125,15 @@ export function coerceItem(
       error: `items[${index}]: ${validated.errors.map((error) => error.message).join('、')}`,
     };
   }
-  const id = str(row.id);
+  const id = typeof row.id === 'string' ? row.id : '';
   if (!isUuidV4(id)) return { ok: false, error: `items[${index}] の id が不正です` };
-  const updatedRaw = str(row.updatedAt);
-  const updatedAt = isUtcSeconds(updatedRaw) ? updatedRaw : toUtcSeconds(new Date());
+  if (
+    row.updatedAt !== undefined &&
+    (typeof row.updatedAt !== 'string' || !isUtcSeconds(row.updatedAt))
+  ) {
+    return { ok: false, error: `items[${index}] の更新日時が不正です` };
+  }
+  const updatedAt = typeof row.updatedAt === 'string' ? row.updatedAt : toUtcSeconds(new Date());
   return { ok: true, item: { ...validated.value, id, updatedAt } };
 }
 
@@ -95,6 +150,9 @@ export function parseVault(
   if (row.schemaVersion > CURRENT_SCHEMA_VERSION || row.schemaVersion < 1) {
     return { ok: false, error: '対応していないバージョンです' };
   }
+  if (row.items.length > MAX_IMPORT_ITEMS) {
+    return { ok: false, error: `件数は${MAX_IMPORT_ITEMS}件までです` };
+  }
   let migrated;
   try {
     migrated = applyMigrations(
@@ -105,9 +163,14 @@ export function parseVault(
     return { ok: false, error: '移行できませんでした' };
   }
   const items: Dajare[] = [];
+  const seenIds = new Set<string>();
   for (let i = 0; i < migrated.items.length; i += 1) {
     const coerced = coerceItem(migrated.items[i], i);
     if (!coerced.ok) return coerced;
+    if (seenIds.has(coerced.item.id)) {
+      return { ok: false, error: `同じIDがファイルの中に複数あります（${coerced.item.id}）` };
+    }
+    seenIds.add(coerced.item.id);
     items.push(coerced.item);
   }
   return { ok: true, items };
@@ -131,6 +194,8 @@ export function planImport(existing: Dajare[], incoming: Dajare[]): ImportPlan {
       continue;
     }
     fresh.push(item);
+    byId.set(item.id, item);
+    byKey.set(textSceneKey(item), item);
   }
   return { fresh, idConflicts, textSceneDupes };
 }
