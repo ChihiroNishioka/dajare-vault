@@ -4,6 +4,7 @@ import {
   gsiConfiguration,
   loginFailureMessage,
   mountGoogleButton,
+  watchGoogleOriginError,
   type GsiId,
 } from '../src/cloud/google-identity';
 
@@ -19,6 +20,13 @@ describe('login messages', () => {
     );
     expect(loginFailureMessage('gsi-load')).toMatch(/別の方法でログイン/);
     expect(loginFailureMessage('not-editor')).toMatch(/見るだけ/);
+  });
+
+  it('turns the Google origin log into the origin message', () => {
+    const codes: string[] = [];
+    watchGoogleOriginError(() => codes.push(loginFailureMessage('gsi-origin')));
+    console.error('[GSI_LOGGER]: The given origin is not allowed for the given client ID.');
+    expect(codes[0]).toMatch(/許可リスト/);
   });
 });
 

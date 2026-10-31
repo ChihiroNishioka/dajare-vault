@@ -18,7 +18,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured, type FirebaseWebConfig } from '../firebase-config';
-import { loadGoogleIdentity, mountGoogleButton } from './google-identity';
+import { loadGoogleIdentity, mountGoogleButton, watchGoogleOriginError } from './google-identity';
 import type { Actor } from '../types';
 import { createFirestoreStore } from './firestore-store';
 import type { DajareStore } from '../store/dajare-store';
@@ -110,6 +110,7 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
       return signInWithPopup(auth, provider).then(() => undefined);
     },
     renderGoogleButton(container, onStatus) {
+      watchGoogleOriginError(() => onStatus('gsi-origin'));
       void googleButton.then((id) => {
         if (!id) {
           onStatus('gsi-load');

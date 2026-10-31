@@ -85,6 +85,20 @@ export function mountGoogleButton(
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client';
 
+let watchingOrigin = false;
+
+/** Google のスクリプトは、許可されていない生成元を console.error で知らせる。 */
+export function watchGoogleOriginError(onOrigin: () => void): void {
+  if (watchingOrigin) return;
+  watchingOrigin = true;
+  const original = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    const text = args.map((part) => String(part)).join(' ');
+    if (text.includes('origin is not allowed') || text.includes('origin_mismatch')) onOrigin();
+    original(...args);
+  };
+}
+
 let loading: Promise<GsiId> | null = null;
 
 /** 共有モードのときだけ読む。ローカルモードでは呼ばない。 */
