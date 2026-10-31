@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { backupNotice } from '../src/domain/backup';
 import { seedId } from '../src/domain/ids';
+import { timestampToIso } from '../src/domain/time';
 import { queryItems } from '../src/domain/query';
 import {
   applyImport,
@@ -164,10 +165,34 @@ describe('transfer', () => {
 
   it('serializes schemaVersion and names the file', () => {
     const parsed = JSON.parse(serialize([sample])) as { schemaVersion: number; items: Dajare[] };
-    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.schemaVersion).toBe(3);
     expect(parsed.items[0]?.text).toBe(sample.text);
     expect(exportFilename(new Date('2026-10-31T01:02:00Z'))).toMatch(
       /^dajare-vault-\d{8}-\d{4}\.json$/,
+    );
+  });
+
+  it('drops an email from an older attribution and does not invent a timestamp', () => {
+    const parsed = parseVault({
+      schemaVersion: 2,
+      items: [
+        {
+          ...sample,
+          createdBy: { uid: 'u1', email: 'person@example.com', name: 'ママ' },
+          updatedBy: { uid: 'u1', email: 'person@example.com', name: 'ママ' },
+        },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.items[0]?.createdBy).toEqual({ uid: 'u1', name: 'ママ' });
+    expect(parsed.items[0]?.updatedBy).toEqual({ uid: 'u1', name: 'ママ' });
+    expect(serialize(parsed.items)).not.toContain('person@example.com');
+    expect(timestampToIso(undefined)).toBeNull();
+    expect(timestampToIso('not-a-date')).toBeNull();
+    expect(timestampToIso('2026-10-31T00:00:00Z')).toBe('2026-10-31T00:00:00Z');
+    expect(timestampToIso({ toDate: () => new Date('2026-10-31T00:00:00.000Z') })).toBe(
+      '2026-10-31T00:00:00Z',
     );
   });
 

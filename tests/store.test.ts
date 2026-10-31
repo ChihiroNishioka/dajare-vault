@@ -122,7 +122,7 @@ describe('createStore', () => {
       schemaVersion: 2,
       items: [{ ...tiny.items[0], text: 'あ'.repeat(201) }],
     });
-    const cases = [original, JSON.stringify({ schemaVersion: 3, items: tiny.items }), '{', ''];
+    const cases = [original, JSON.stringify({ schemaVersion: 4, items: tiny.items }), '{', ''];
     for (const raw of cases) {
       const storage = memoryStorage({ [DATA_KEY]: raw });
       const store = createStore(storage, {

@@ -10,6 +10,7 @@ import {
 import { LIMITS, READING_RE } from '../domain/validate';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import type { DajareStore } from '../store/dajare-store';
+import { adaptLocalStore } from '../store/local-dajare-store';
 import { createStore, type Store } from '../store/store';
 import seedFile from '../data/seed.json';
 import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
@@ -19,7 +20,14 @@ import type { Actor } from '../types';
 import { defineCard, type DajareCard } from './card';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
-import { deletePanel, formPanel, importPanel, promptPanel, settingsPanel } from './panel';
+import {
+  confirmUploadPanel,
+  deletePanel,
+  formPanel,
+  importPanel,
+  promptPanel,
+  settingsPanel,
+} from './panel';
 import { defineStars } from './stars';
 
 defineCard();
@@ -31,6 +39,7 @@ type Panel =
   | { kind: 'settings' }
   | { kind: 'import'; plan: ImportPlan; incoming: Dajare[] }
   | { kind: 'delete'; id: string }
+  | { kind: 'upload-local' }
   | { kind: 'prompt' };
 
 const ui = {
@@ -60,6 +69,9 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   let cloudStore: DajareStore | null = null;
   let cloudSignIn: (() => Promise<void>) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
+  let cloudBootError: string | null = null;
+  const localApi = adaptLocalStore(store);
+  const active = (): DajareStore => (gate.mode === 'cloud' && cloudStore ? cloudStore : localApi);
   root.innerHTML = shell();
   const shellEl = root.querySelector<HTMLElement>('.app');
   const panel = root.querySelector<HTMLElement>('#panel');
@@ -106,7 +118,10 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       sort: ui.sort,
     });
     const notice = backupNotice(state.meta, new Date());
-    const bits = [notice.text, state.loadError, state.saveError].filter(Boolean);
+    const cloudError = gate.mode === 'cloud' ? cloudStore?.readError() : null;
+    const bits = [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(
+      Boolean,
+    );
     banner.replaceChildren();
     const line = document.createElement('span');
     line.textContent = bits.join(' / ');
@@ -175,10 +190,10 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (!gate.user) {
-      slot.innerHTML = `<button type="button" class="texty" data-action="sign-in">ログイン</button>`;
+      slot.innerHTML = `<p class="who"><span>共有</span></p><button type="button" class="texty" data-action="sign-in">ログイン</button>`;
       return;
     }
-    const viewer = gate.isEditor ? '' : '<span>閲覧のみ</span>';
+    const viewer = gate.isEditor ? '<span>共有</span>' : '<span>閲覧のみ</span>';
     slot.innerHTML = `<p class="who"><b>${escapeHtml(gate.user.name)}</b>${viewer}<button type="button" class="quiet" data-action="sign-out">ログアウト</button></p>`;
   };
 
@@ -288,31 +303,20 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
   const saveForm = (): void => {
     const draft = readDraft();
     if (!draft || ui.panel.kind !== 'form') return;
-    if (gate.mode === 'cloud' && cloudStore) {
-      const editing = ui.panel.mode === 'edit' && ui.panel.id ? ui.panel.id : '';
-      const pending = editing
-        ? cloudStore.update(editing, draft, gate.user)
-        : cloudStore.create(draft, gate.user);
-      void pending.then((result) => {
-        if (!result.ok) {
-          showFormErrors([{ field: 'form', message: result.error ?? '保存できませんでした' }]);
-          return;
-        }
-        showToast(editing ? '書き直しました' : '紙を足しました');
-        afterWrite();
-      });
-      return;
-    }
-    const result =
-      ui.panel.mode === 'edit' && ui.panel.id
-        ? store.update(ui.panel.id, draft, { actor: gate.user })
-        : store.add(draft, { actor: gate.user });
-    if (!result.ok) {
-      showFormErrors(result.errors);
-      return;
-    }
-    showToast(ui.panel.mode === 'edit' ? '書き直しました' : '紙を足しました');
-    afterWrite();
+    const editing = ui.panel.mode === 'edit' && ui.panel.id ? ui.panel.id : '';
+    const pending = editing
+      ? active().update(editing, draft, gate.user)
+      : active().create(draft, gate.user);
+    void pending.then((result) => {
+      if (!result.ok) {
+        showFormErrors(
+          result.errors ?? [{ field: 'form', message: result.error ?? '保存できませんでした' }],
+        );
+        return;
+      }
+      showToast(editing ? '書き直しました' : '紙を足しました');
+      afterWrite();
+    });
   };
 
   const download = (filename: string, contents: string): void => {
@@ -533,7 +537,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (action === 'edit') {
-      const item = store.getState().items.find((row) => row.id === actionEl.dataset.id);
+      const item = listedItems().find((row) => row.id === actionEl.dataset.id);
       if (!item) return;
       ui.draftTags = [...item.tags];
       ui.draftSpeakers = [...item.speakers];
@@ -546,32 +550,25 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     if (action === 'delete') {
       if (!actionEl.dataset.id) return;
       ui.panel = { kind: 'delete', id: actionEl.dataset.id };
-      const item = store.getState().items.find((row) => row.id === actionEl.dataset.id);
+      const item = listedItems().find((row) => row.id === actionEl.dataset.id);
       if (!item) return;
       panel.innerHTML = deletePanel(item);
       openPanel();
       return;
     }
     if (action === 'confirm-delete' && ui.panel.kind === 'delete') {
-      if (gate.mode === 'cloud' && cloudStore) {
-        void cloudStore.remove(ui.panel.id).then((result) => {
+      const id = ui.panel.id;
+      void active()
+        .remove(id)
+        .then((result) => {
           if (!result.ok) {
             showToast(result.error ?? '捨てられませんでした');
+            renderResults();
             return;
           }
           showToast('捨てました');
           afterWrite();
         });
-        return;
-      }
-      const removed = store.remove(ui.panel.id);
-      if (!removed) {
-        showToast(store.getState().saveError ?? '捨てられませんでした');
-        renderResults();
-        return;
-      }
-      showToast('捨てました');
-      afterWrite();
       return;
     }
     if (action === 'export-broken') {
@@ -601,7 +598,16 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
         showToast('共有の準備ができていません');
         return;
       }
-      void cloudSignIn().catch(() => showToast('ログインできませんでした'));
+      void cloudSignIn().catch((error: unknown) => {
+        const code =
+          error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+        if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
+        if (code === 'auth/popup-blocked') {
+          showToast('ログイン画面が開けませんでした。もう一度タップしてください');
+          return;
+        }
+        showToast('ログインできませんでした');
+      });
       return;
     }
     if (action === 'sign-out') {
@@ -609,23 +615,41 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (action === 'seed-cloud' && cloudStore && gate.user) {
-      void cloudStore.bulkImport(seedFile.items as Dajare[], gate.user).then((result) => {
-        showToast(result.error ?? `${result.added}件を共有DBに入れました`);
+      void cloudStore.migrateSeed(seedFile.items as Dajare[], gate.user).then((result) => {
+        showToast(
+          result.error ??
+            (result.added === 0
+              ? '新しく入れる紙はありませんでした'
+              : `${result.added}件を共有DBに入れました`),
+        );
         renderCloudNotes();
       });
       return;
     }
     if (action === 'upload-local' && cloudStore && gate.user) {
+      ui.panel = { kind: 'upload-local' };
+      panel.innerHTML = confirmUploadPanel();
+      openPanel();
+      return;
+    }
+    if (action === 'confirm-upload' && cloudStore && gate.user) {
       const raw = window.localStorage.getItem(DATA_KEY);
       if (!raw) return;
-      const parsed = parseVault(JSON.parse(raw) as unknown);
+      let parsed: ReturnType<typeof parseVault>;
+      try {
+        parsed = parseVault(JSON.parse(raw) as unknown);
+      } catch {
+        showToast('この端末の保存を読めませんでした');
+        return;
+      }
       if (!parsed.ok) {
         showToast(parsed.error);
         return;
       }
       void cloudStore.bulkImport(parsed.items, gate.user).then((result) => {
-        window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
+        if (!result.error) window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
         showToast(result.error ?? `${result.added}件を共有DBへ送りました`);
+        closePanel();
         renderCloudNotes();
       });
       return;
@@ -711,7 +735,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
         draft.text.trim() || draft.scene.trim() || draft.memo.trim() || draft.reading.trim(),
       );
     }
-    const current = store.getState().items.find((item) => item.id === panelState.id);
+    const current = listedItems().find((item) => item.id === panelState.id);
     if (!current) return true;
     return (
       draft.text.trim() !== current.text ||
@@ -755,9 +779,9 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     const notes: string[] = [];
-    if (cloudStore.getItems().length === 0) {
+    if (cloudStore.migrationPending()) {
       notes.push(
-        '<button type="button" data-action="seed-cloud">初期データ（119件）を共有DBに入れる</button>',
+        '<p>初期データの移行が終わっていません。途中まで入っているときは、足りない分だけ足します。</p><button type="button" data-action="seed-cloud">初期データを共有DBに入れる</button>',
       );
     }
     if (window.localStorage.getItem(DATA_KEY) && !window.localStorage.getItem(LOCAL_UPLOAD_KEY)) {
@@ -794,9 +818,8 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
         });
       })
       .catch(() => {
-        gate.mode = 'local';
-        gate.isEditor = true;
-        showToast('共有の準備に失敗しました。この端末の保存のまま開いています');
+        cloudBootError = '共有の準備に失敗しました。この端末の保存には切り替えていません';
+        showToast(cloudBootError);
         syncAccount();
         renderResults();
       });

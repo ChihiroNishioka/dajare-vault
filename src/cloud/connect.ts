@@ -1,3 +1,21 @@
+import { initializeApp, type FirebaseApp } from 'firebase/app';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut as firebaseSignOut,
+  type User,
+} from 'firebase/auth';
+import {
+  doc,
+  getDoc,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  type Firestore,
+} from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured, type FirebaseWebConfig } from '../firebase-config';
 import type { Actor } from '../types';
 import { createFirestoreStore } from './firestore-store';
@@ -12,26 +30,29 @@ export interface CloudSession {
 export interface CloudConnection {
   store: DajareStore;
   subscribe(listener: (session: CloudSession) => void): () => void;
+  /** クリックの中から、await より前に呼ぶ。ポップアップだけ。 */
   signIn(): Promise<void>;
   signOut(): Promise<void>;
 }
 
-/** 設定があるときだけ呼ぶ。Firebase SDK はこの関数の中で初めて読み込む。 */
-export async function connectCloud(
+let opening: Promise<CloudConnection> | null = null;
+
+/** ページを開いたときに呼ぶ。ボタンを押してから SDK を読み始めない。 */
+export function connectCloud(
   config: FirebaseWebConfig = firebaseConfig as FirebaseWebConfig,
 ): Promise<CloudConnection> {
+  if (!opening) opening = openCloud(config);
+  return opening;
+}
+
+async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
   if (!isFirebaseConfigured(config)) {
     throw new Error('Firebase の設定がありません');
   }
-  const [{ initializeApp }, authMod, firestoreMod] = await Promise.all([
-    import('firebase/app'),
-    import('firebase/auth'),
-    import('firebase/firestore'),
-  ]);
   const app = initializeApp(config);
-  const auth = authMod.getAuth(app);
-  const db = firestoreMod.getFirestore(app);
-  const provider = new authMod.GoogleAuthProvider();
+  const auth = getAuth(app);
+  const db = openFirestore(app);
+  const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
 
   let session: CloudSession = { user: null, emailVerified: false, isEditor: false };
@@ -40,66 +61,63 @@ export async function connectCloud(
     for (const listener of listeners) listener(session);
   };
 
-  const refreshEditor = async (user: import('firebase/auth').User | null): Promise<void> => {
-    if (!user?.email) {
+  const refreshEditor = async (user: User | null): Promise<void> => {
+    if (!user || typeof user.email !== 'string' || user.email.length === 0) {
       session = { user: null, emailVerified: false, isEditor: false };
       emit();
       return;
     }
-    const actor: Actor = {
-      uid: user.uid,
-      email: user.email,
-      name: user.displayName || user.email,
-    };
+    const email = user.email.toLowerCase();
     let isEditor = false;
+    let name = user.displayName?.trim() || 'ログイン中';
     if (user.emailVerified) {
       try {
-        const snap = await firestoreMod.getDoc(
-          firestoreMod.doc(db, 'editors', user.email.toLowerCase()),
-        );
-        isEditor = snap.exists();
+        const snap = await getDoc(doc(db, 'editors', email));
+        const publicName = snap.exists() ? snap.data().publicName : undefined;
+        if (typeof publicName === 'string' && publicName.length >= 1 && publicName.length <= 40) {
+          isEditor = true;
+          name = publicName;
+        }
       } catch {
         isEditor = false;
       }
     }
-    session = { user: actor, emailVerified: user.emailVerified, isEditor };
+    session = {
+      user: { uid: user.uid, name },
+      emailVerified: user.emailVerified,
+      isEditor,
+    };
     emit();
   };
 
-  authMod.onAuthStateChanged(auth, (user) => {
+  onAuthStateChanged(auth, (user) => {
     void refreshEditor(user);
   });
-  try {
-    await authMod.getRedirectResult(auth);
-  } catch {
-    // ログインしていない、または戻りの検証に失敗した。画面は閲覧のまま。
-  }
-
-  const actor = (): Actor | null => session.user;
 
   return {
-    store: createFirestoreStore(db, actor),
+    store: createFirestoreStore(db, () => session.user),
     subscribe(listener) {
       listeners.add(listener);
       listener(session);
       return () => listeners.delete(listener);
     },
-    async signIn() {
-      try {
-        await authMod.signInWithPopup(auth, provider);
-      } catch (error) {
-        const code =
-          error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
-        const fallback =
-          code === 'auth/popup-blocked' ||
-          code === 'auth/cancelled-popup-request' ||
-          code === 'auth/operation-not-supported-in-this-environment';
-        if (!fallback) throw error;
-        await authMod.signInWithRedirect(auth, provider);
-      }
+    signIn() {
+      return signInWithPopup(auth, provider).then(() => undefined);
     },
     async signOut() {
-      await authMod.signOut(auth);
+      await firebaseSignOut(auth);
     },
   };
+}
+
+function openFirestore(app: FirebaseApp): Firestore {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    });
+  } catch {
+    return getFirestore(app);
+  }
 }

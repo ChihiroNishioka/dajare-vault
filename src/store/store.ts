@@ -10,6 +10,7 @@ import { isUuidV4, toUtcSeconds } from '../domain/ids';
 import { validateDraft } from '../domain/validate';
 import {
   BROKEN_PREFIX,
+  CURRENT_SCHEMA_VERSION,
   DATA_KEY,
   META_KEY,
   type Actor,
@@ -123,7 +124,7 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       state.saveError = STORAGE_BLOCKED;
       return false;
     }
-    const next = JSON.stringify({ schemaVersion: seed.schemaVersion, items: state.items });
+    const next = JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION, items: state.items });
     try {
       storage.setItem(DATA_KEY, next);
     } catch {
@@ -207,8 +208,8 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       state.loadError = null;
       state.items = parsed.items;
       if (
-        !raw.includes(`"schemaVersion":${seed.schemaVersion}`) &&
-        !raw.includes(`"schemaVersion": ${seed.schemaVersion}`)
+        !raw.includes(`"schemaVersion":${CURRENT_SCHEMA_VERSION}`) &&
+        !raw.includes(`"schemaVersion": ${CURRENT_SCHEMA_VERSION}`)
       ) {
         persist();
       }

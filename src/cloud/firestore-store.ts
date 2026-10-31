@@ -2,46 +2,34 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
+  getDoc,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
+  setDoc,
   updateDoc,
-  writeBatch,
   type Firestore,
 } from 'firebase/firestore';
+import { timestampToIso } from '../domain/time';
 import type { Actor, Dajare, DajareDraft } from '../types';
-import type { DajareStore } from '../store/dajare-store';
+import type { DajareStore, ImportTally } from '../store/dajare-store';
 
 const COLLECTION = 'dajare';
+const MIGRATION_PATH = ['meta', 'seedMigration'] as const;
 
-function toIso(value: unknown): string {
-  if (
-    value &&
-    typeof value === 'object' &&
-    'toDate' in value &&
-    typeof value.toDate === 'function'
-  ) {
-    const date = (value as { toDate: () => Date }).toDate();
-    return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
-  }
-  if (typeof value === 'string') return value;
-  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
+type MigrationState = 'unknown' | 'pending' | 'done';
 
 function actorOf(value: unknown): Actor | null {
   if (!value || typeof value !== 'object') return null;
   const row = value as Record<string, unknown>;
-  if (
-    typeof row.uid !== 'string' ||
-    typeof row.email !== 'string' ||
-    typeof row.name !== 'string'
-  ) {
-    return null;
-  }
-  return { uid: row.uid, email: row.email, name: row.name };
+  if (typeof row.uid !== 'string' || typeof row.name !== 'string') return null;
+  if (!row.uid || !row.name) return null;
+  return { uid: row.uid, name: row.name };
 }
 
 export function dajareFromDoc(id: string, data: Record<string, unknown>): Dajare {
+  const updatedAt = timestampToIso(data.updatedAt);
+  const createdAt = timestampToIso(data.createdAt);
   return {
     id,
     text: String(data.text ?? ''),
@@ -66,18 +54,14 @@ export function dajareFromDoc(id: string, data: Record<string, unknown>): Dajare
       ? data.speakers.filter((name): name is string => typeof name === 'string')
       : [],
     memo: typeof data.memo === 'string' ? data.memo : '',
-    updatedAt: toIso(data.updatedAt),
-    createdAt: toIso(data.createdAt),
+    updatedAt: updatedAt ?? '',
+    ...(createdAt ? { createdAt } : {}),
     createdBy: actorOf(data.createdBy),
     updatedBy: actorOf(data.updatedBy),
   };
 }
 
-function payload(
-  draft: DajareDraft,
-  actor: Actor,
-  previous: { createdAt: unknown; createdBy: unknown } | null,
-) {
+function contentOf(draft: DajareDraft) {
   return {
     text: draft.text.trim(),
     scene: draft.scene.trim(),
@@ -90,28 +74,133 @@ function payload(
     tags: draft.tags,
     speakers: draft.speakers,
     memo: draft.memo.trim(),
-    createdAt: previous ? previous.createdAt : serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    createdBy: previous ? previous.createdBy : actor,
-    updatedBy: actor,
   };
+}
+
+function publicActor(actor: Actor): Actor {
+  return { uid: actor.uid, name: actor.name };
+}
+
+function createFields(id: string, draft: DajareDraft, actor: Actor) {
+  const who = publicActor(actor);
+  return {
+    id,
+    ...contentOf(draft),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    createdBy: who,
+    updatedBy: who,
+  };
+}
+
+function draftOf(item: Dajare): DajareDraft {
+  return {
+    text: item.text,
+    scene: item.scene,
+    addedAt: item.addedAt,
+    addedAtNote: item.addedAtNote,
+    reading: item.reading,
+    source: item.source,
+    rating: item.rating,
+    favorite: item.favorite,
+    tags: item.tags,
+    speakers: item.speakers,
+    memo: item.memo,
+  };
+}
+
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+}
+
+/** 同時に作ろうとすると、ルール拒否に見える競合が返ることがある。読み直してからもう一度。 */
+async function withContentionRetry<T>(work: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      last = error;
+      const code = errorCode(error);
+      if (code !== 'permission-denied' && code !== 'aborted' && code !== 'failed-precondition') {
+        throw error;
+      }
+    }
+  }
+  throw last;
+}
+
+function failureMessage(error: unknown, fallback: string): string {
+  const code = errorCode(error);
+  if (code === 'permission-denied') return fallback;
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export function createFirestoreStore(db: Firestore, actor: () => Actor | null): DajareStore {
   let items: Dajare[] = [];
+  let migrationState: MigrationState = 'unknown';
+  let readError: string | null = null;
   const listeners = new Set<(next: Dajare[]) => void>();
 
   const emit = (): void => {
     for (const listener of listeners) listener(items);
   };
 
-  const ready = new Promise<void>((resolve) => {
-    onSnapshot(collection(db, COLLECTION), (snap) => {
+  onSnapshot(
+    collection(db, COLLECTION),
+    (snap) => {
       items = snap.docs.map((row) => dajareFromDoc(row.id, row.data() as Record<string, unknown>));
+      readError = null;
       emit();
-      resolve();
-    });
-  });
+    },
+    () => {
+      readError = '共有の紙を読めませんでした';
+      emit();
+    },
+  );
+
+  onSnapshot(
+    doc(db, ...MIGRATION_PATH),
+    (snap) => {
+      migrationState = snap.exists() ? 'done' : 'pending';
+      emit();
+    },
+    () => {
+      readError = '共有の状態を読めませんでした';
+      emit();
+    },
+  );
+
+  const createIfAbsent = async (
+    itemId: string,
+    draft: DajareDraft,
+    person: Actor,
+  ): Promise<'created' | 'skipped'> => {
+    const ref = doc(db, COLLECTION, itemId);
+    return withContentionRetry(() =>
+      runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists()) return 'skipped';
+        tx.set(ref, createFields(itemId, draft, person));
+        return 'created';
+      }),
+    );
+  };
+
+  const importMissing = async (incoming: Dajare[], person: Actor): Promise<ImportTally> => {
+    let added = 0;
+    let skipped = 0;
+    for (const item of incoming) {
+      try {
+        const outcome = await createIfAbsent(item.id, draftOf(item), person);
+        if (outcome === 'created') added += 1;
+        else skipped += 1;
+      } catch (error) {
+        return { added, skipped, error: failureMessage(error, '共有DBへ送れませんでした') };
+      }
+    }
+    return { added, skipped };
+  };
 
   return {
     subscribe(listener) {
@@ -120,42 +209,27 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
       return () => listeners.delete(listener);
     },
     getItems: () => items,
+    migrationPending: () => migrationState === 'pending',
+    readError: () => readError,
     async create(draft, who, id) {
       const person = who ?? actor();
       if (!person) return { ok: false, error: 'ログインが必要です' };
       const itemId = id ?? crypto.randomUUID();
       try {
-        const batch = writeBatch(db);
-        batch.set(
-          doc(db, COLLECTION, itemId),
-          payload({ ...draft, text: draft.text.trim(), scene: draft.scene.trim() }, person, null),
-        );
-        await batch.commit();
-        await ready;
+        await setDoc(doc(db, COLLECTION, itemId), createFields(itemId, draft, person));
         const saved = items.find((row) => row.id === itemId);
         return saved
           ? { ok: true, item: saved }
           : {
               ok: true,
-              item: {
-                ...draft,
-                id: itemId,
-                updatedAt: '',
-                createdBy: person,
-                updatedBy: person,
-                text: draft.text.trim(),
-                scene: draft.scene.trim(),
-                reading: draft.reading.trim(),
-                source: draft.source.trim(),
-                memo: draft.memo.trim(),
-                addedAtNote: draft.addedAtNote.trim(),
-              },
+              item: dajareFromDoc(itemId, {
+                ...contentOf(draft),
+                createdBy: publicActor(person),
+                updatedBy: publicActor(person),
+              }),
             };
       } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : '保存できませんでした',
-        };
+        return { ok: false, error: failureMessage(error, '保存できませんでした') };
       }
     },
     async update(id, draft, who) {
@@ -165,26 +239,13 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
       if (!previous) return { ok: false, error: '見つかりませんでした' };
       try {
         await updateDoc(doc(db, COLLECTION, id), {
-          text: draft.text.trim(),
-          scene: draft.scene.trim(),
-          addedAt: draft.addedAt,
-          addedAtNote: draft.addedAtNote.trim(),
-          reading: draft.reading.trim(),
-          source: draft.source.trim(),
-          rating: draft.rating,
-          favorite: draft.favorite,
-          tags: draft.tags,
-          speakers: draft.speakers,
-          memo: draft.memo.trim(),
+          ...contentOf(draft),
           updatedAt: serverTimestamp(),
-          updatedBy: person,
+          updatedBy: publicActor(person),
         });
         return { ok: true, item: items.find((row) => row.id === id) ?? previous };
       } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : '保存できませんでした',
-        };
+        return { ok: false, error: failureMessage(error, '保存できませんでした') };
       }
     },
     async remove(id) {
@@ -192,55 +253,46 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
         await deleteDoc(doc(db, COLLECTION, id));
         return { ok: true };
       } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : '削除できませんでした',
-        };
+        return { ok: false, error: failureMessage(error, '削除できませんでした') };
       }
     },
-    async bulkImport(incoming, person) {
-      const existing = new Set(
-        (await getDocs(collection(db, COLLECTION))).docs.map((row) => row.id),
-      );
-      const fresh = incoming.filter((item) => !existing.has(item.id));
-      const skipped = incoming.length - fresh.length;
-      let added = 0;
-      for (let i = 0; i < fresh.length; i += 400) {
-        const batch = writeBatch(db);
-        for (const item of fresh.slice(i, i + 400)) {
-          batch.set(
-            doc(db, COLLECTION, item.id),
-            payload(
-              {
-                text: item.text,
-                scene: item.scene,
-                addedAt: item.addedAt,
-                addedAtNote: item.addedAtNote,
-                reading: item.reading,
-                source: item.source,
-                rating: item.rating,
-                favorite: item.favorite,
-                tags: item.tags,
-                speakers: item.speakers,
-                memo: item.memo,
-              },
-              person,
-              null,
-            ),
-          );
-          added += 1;
+    bulkImport(incoming, person) {
+      return importMissing(incoming, person);
+    },
+    async migrateSeed(incoming, person) {
+      const marker = doc(db, ...MIGRATION_PATH);
+      try {
+        const existing = await getDoc(marker);
+        if (existing.exists()) {
+          migrationState = 'done';
+          emit();
+          return { added: 0, skipped: incoming.length };
         }
-        try {
-          await batch.commit();
-        } catch (error) {
-          return {
-            added,
-            skipped,
-            error: error instanceof Error ? error.message : '共有DBへ送れませんでした',
-          };
-        }
+      } catch (error) {
+        return {
+          added: 0,
+          skipped: 0,
+          error: failureMessage(error, '共有の状態を読めませんでした'),
+        };
       }
-      return { added, skipped };
+      const imported = await importMissing(incoming, person);
+      if (imported.error) return imported;
+      try {
+        await withContentionRetry(() =>
+          runTransaction(db, async (tx) => {
+            const snap = await tx.get(marker);
+            if (snap.exists()) return;
+            tx.set(marker, { doneAt: serverTimestamp() });
+          }),
+        );
+      } catch (error) {
+        return {
+          added: imported.added,
+          skipped: imported.skipped,
+          error: failureMessage(error, '移行の印を書けませんでした'),
+        };
+      }
+      return imported;
     },
   };
 }

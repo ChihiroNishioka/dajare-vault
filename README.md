@@ -12,7 +12,7 @@ GitHub Pages を有効にすると、ビルド済みの JavaScript ごと、こ�
 
 ## 家族で共有する
 
-Firebase（Google ログインと Firestore）を足すと、URL を知っている人は誰でも読め、許可した Google アカウントだけが追加・編集・削除できます。設定の手順は [docs/firebase-setup.md](docs/firebase-setup.md) です。`src/firebase-config.ts` が空のあいだは、今までどおりその端末の中だけに保存します。
+Firebase（Google ログインと Firestore）を足すと、URL を知っている人は誰でも読め、許可した Google アカウントだけが追加・編集・削除できます。設定の手順は [docs/firebase-setup.md](docs/firebase-setup.md) です。`src/firebase-config.ts` が空のあいだは、今までどおりその端末の中だけに保存します。無料プランには自動バックアップがないので、定期的に JSON を書き出してください。
 
 ## 開発
 

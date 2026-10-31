@@ -5,7 +5,6 @@ import { seedId } from '../src/domain/ids';
 
 export const actor: Actor = {
   uid: 'editor-uid',
-  email: 'editor@example.com',
   name: '編集者',
 };
 

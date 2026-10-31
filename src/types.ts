@@ -1,9 +1,11 @@
 export type Rating = 1 | 2 | 3 | 4 | 5;
 
-/** Google アカウントなど、誰が書いたかを残すときの最小情報。 */
+/**
+ * 公開される文書に残す書いた人。メールアドレスは入れない。
+ * name は Google の表示名ではなく、editors の publicName。
+ */
 export interface Actor {
   uid: string;
-  email: string;
   name: string;
 }
 
@@ -35,7 +37,7 @@ export interface VaultFile {
   items: Dajare[];
 }
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /** 仕様の localStorage キー。中身の schemaVersion とは別に、置き場の名前として固定する。 */
 export const DATA_KEY = 'dajareVault:v1';

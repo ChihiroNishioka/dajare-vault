@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
   assertSucceeds,
@@ -18,17 +18,29 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { createFirestoreStore } from '../src/cloud/firestore-store';
-import { registerStoreContract, actor } from './store-contract.cases';
+import { seedId } from '../src/domain/ids';
+import type { Dajare } from '../src/types';
+import { actor, registerStoreContract, sampleDraft } from './store-contract.cases';
 
 const PROJECT = 'demo-dajare';
 let env: RulesTestEnvironment;
 
-function editorAuth(email = 'editor@example.com', verified = true, uid = 'editor-uid') {
-  return env.authenticatedContext(uid, { email, email_verified: verified });
+function editorAuth(
+  email = 'editor@example.com',
+  verified = true,
+  uid = 'editor-uid',
+  provider: 'google.com' | 'password' = 'google.com',
+) {
+  return env.authenticatedContext(uid, {
+    email,
+    email_verified: verified,
+    firebase: { sign_in_provider: provider },
+  });
 }
 
-function body(uid: string, email: string, extra: Record<string, unknown> = {}) {
+function entry(id: string, extra: Record<string, unknown> = {}) {
   return {
+    id,
     text: '布団がふっとんだ',
     scene: '朝',
     addedAt: '2026-10-02',
@@ -42,10 +54,31 @@ function body(uid: string, email: string, extra: Record<string, unknown> = {}) {
     memo: '',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-    createdBy: { uid, email, name: '編集者' },
-    updatedBy: { uid, email, name: '編集者' },
+    createdBy: { uid: 'editor-uid', name: '編集者' },
+    updatedBy: { uid: 'editor-uid', name: '編集者' },
     ...extra,
   };
+}
+
+function pun(id: string, text: string): Dajare {
+  return { ...sampleDraft(text), id, updatedAt: '2026-04-01T00:00:00Z' };
+}
+
+async function storedText(id: string): Promise<string> {
+  let text = '';
+  await env.withSecurityRulesDisabled(async (context) => {
+    const snap = await getDoc(doc(context.firestore(), `dajare/${id}`));
+    text = snap.exists() ? String(snap.data().text ?? '') : '';
+  });
+  return text;
+}
+
+async function waitFor(pred: () => boolean): Promise<void> {
+  const start = Date.now();
+  while (!pred()) {
+    if (Date.now() - start > 5000) throw new Error('timed out waiting for the store');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 beforeAll(async () => {
@@ -69,7 +102,7 @@ beforeEach(async () => {
   if (!env) return;
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async (context) => {
-    await setDoc(doc(context.firestore(), 'editors/editor@example.com'), { name: '編集者' });
+    await setDoc(doc(context.firestore(), 'editors/editor@example.com'), { publicName: '編集者' });
   });
 });
 
@@ -78,18 +111,8 @@ const emulatorUp = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 describe.skipIf(!emulatorUp)('firestore rules', () => {
   it('未ログインで read できる', async () => {
     await env.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), 'dajare/item-1'), {
-        text: '公開',
-        scene: '不明',
-        addedAt: null,
-        addedAtNote: '',
-        reading: '',
-        source: '',
-        rating: null,
-        favorite: false,
-        tags: [],
-        speakers: [],
-        memo: '',
+      await setDoc(doc(context.firestore(), `dajare/${seedId(1)}`), {
+        ...entry(seedId(1)),
         createdAt: new Date(),
         updatedAt: new Date(),
         createdBy: actor,
@@ -97,80 +120,214 @@ describe.skipIf(!emulatorUp)('firestore rules', () => {
       });
     });
     const db = env.unauthenticatedContext().firestore();
-    await assertSucceeds(getDoc(doc(db, 'dajare/item-1')));
+    await assertSucceeds(getDoc(doc(db, `dajare/${seedId(1)}`)));
   });
 
   it('未ログインでは書き込めない', async () => {
     const db = env.unauthenticatedContext().firestore();
-    await assertFails(setDoc(doc(db, 'dajare/new-1'), body('nobody', 'editor@example.com')));
+    await assertFails(setDoc(doc(db, `dajare/${seedId(2)}`), entry(seedId(2))));
   });
 
   it('許可外アカウントでは書き込めない', async () => {
     const db = env
-      .authenticatedContext('stranger-uid', { email: 'stranger@example.com', email_verified: true })
+      .authenticatedContext('stranger-uid', {
+        email: 'stranger@example.com',
+        email_verified: true,
+        firebase: { sign_in_provider: 'google.com' },
+      })
       .firestore();
     await assertFails(
-      setDoc(doc(db, 'dajare/new-2'), body('stranger-uid', 'stranger@example.com')),
+      setDoc(
+        doc(db, `dajare/${seedId(3)}`),
+        entry(seedId(3), {
+          createdBy: { uid: 'stranger-uid', name: '編集者' },
+          updatedBy: { uid: 'stranger-uid', name: '編集者' },
+        }),
+      ),
     );
   });
 
   it('email 未検証では書き込めない', async () => {
     const db = editorAuth('editor@example.com', false).firestore();
-    await assertFails(setDoc(doc(db, 'dajare/new-3'), body('editor-uid', 'editor@example.com')));
+    await assertFails(setDoc(doc(db, `dajare/${seedId(4)}`), entry(seedId(4))));
+  });
+
+  it('Google 以外のログインでは書き込めない', async () => {
+    const db = editorAuth('editor@example.com', true, 'editor-uid', 'password').firestore();
+    await assertFails(setDoc(doc(db, `dajare/${seedId(5)}`), entry(seedId(5))));
   });
 
   it('許可済みアカウントは作成・更新・削除できる', async () => {
     const db = editorAuth().firestore();
-    const ref = doc(db, 'dajare/owned');
-    await assertSucceeds(setDoc(ref, body('editor-uid', 'editor@example.com')));
-    await assertSucceeds(updateDoc(ref, { text: '直した', updatedAt: serverTimestamp() }));
+    const id = seedId(6);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await assertSucceeds(
+      updateDoc(ref, {
+        text: '直した',
+        updatedAt: serverTimestamp(),
+        updatedBy: { uid: 'editor-uid', name: '編集者' },
+      }),
+    );
     await assertSucceeds(deleteDoc(ref));
+  });
+
+  it('リストの各要素が上限内なら作成できる', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(7);
+    await assertSucceeds(
+      setDoc(
+        doc(db, `dajare/${id}`),
+        entry(id, {
+          tags: Array.from({ length: 10 }, () => 'あ'.repeat(20)),
+          speakers: Array.from({ length: 10 }, () => 'い'.repeat(30)),
+        }),
+      ),
+    );
   });
 
   it('メールアドレスの大文字小文字が違っても許可済みなら作成できる', async () => {
     const db = editorAuth('Editor@Example.com').firestore();
-    await assertSucceeds(setDoc(doc(db, 'dajare/cased'), body('editor-uid', 'Editor@Example.com')));
+    const id = seedId(8);
+    await assertSucceeds(setDoc(doc(db, `dajare/${id}`), entry(id)));
   });
 
   it('createdBy の偽装は拒否される', async () => {
     const db = editorAuth().firestore();
-    await assertFails(setDoc(doc(db, 'dajare/spoof'), body('someone-else', 'editor@example.com')));
+    await assertFails(
+      setDoc(
+        doc(db, `dajare/${seedId(9)}`),
+        entry(seedId(9), {
+          createdBy: { uid: 'someone-else', name: '編集者' },
+          updatedBy: { uid: 'someone-else', name: '編集者' },
+        }),
+      ),
+    );
   });
 
-  it('createdBy の書き換えは拒否される', async () => {
+  it('メールアドレスを文書に入れる偽装は拒否される', async () => {
     const db = editorAuth().firestore();
-    const ref = doc(db, 'dajare/keep-author');
-    await assertSucceeds(setDoc(ref, body('editor-uid', 'editor@example.com')));
+    await assertFails(
+      setDoc(
+        doc(db, `dajare/${seedId(10)}`),
+        entry(seedId(10), {
+          createdBy: { uid: 'editor-uid', name: '編集者', email: 'editor@example.com' },
+          updatedBy: { uid: 'editor-uid', name: '編集者', email: 'editor@example.com' },
+        }),
+      ),
+    );
+  });
+
+  it('日時の偽装は拒否される', async () => {
+    const db = editorAuth().firestore();
+    const forged = new Date('2020-01-01T00:00:00Z');
+    await assertFails(
+      setDoc(
+        doc(db, `dajare/${seedId(11)}`),
+        entry(seedId(11), { createdAt: forged, updatedAt: forged }),
+      ),
+    );
+    const id = seedId(12);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
     await assertFails(
       updateDoc(ref, {
-        createdBy: { uid: 'editor-uid', email: 'editor@example.com', name: '別人' },
-        updatedAt: serverTimestamp(),
+        text: '直した',
+        updatedAt: forged,
+        updatedBy: { uid: 'editor-uid', name: '編集者' },
       }),
     );
   });
 
-  it('余分なキーは拒否される', async () => {
+  it('publicName と違う名前は拒否される', async () => {
     const db = editorAuth().firestore();
     await assertFails(
-      setDoc(doc(db, 'dajare/extra'), body('editor-uid', 'editor@example.com', { note: '余分' })),
+      setDoc(
+        doc(db, `dajare/${seedId(13)}`),
+        entry(seedId(13), {
+          createdBy: { uid: 'editor-uid', name: '別人' },
+          updatedBy: { uid: 'editor-uid', name: '別人' },
+        }),
+      ),
+    );
+    const id = seedId(14);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await assertFails(
+      updateDoc(ref, {
+        updatedAt: serverTimestamp(),
+        updatedBy: { uid: 'editor-uid', name: '別人' },
+      }),
     );
   });
 
-  it('長さ超過は拒否される', async () => {
+  it('createdBy と createdAt の書き換えは拒否される', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(15);
+    const ref = doc(db, `dajare/${id}`);
+    await assertSucceeds(setDoc(ref, entry(id)));
+    await assertFails(
+      updateDoc(ref, {
+        createdBy: { uid: 'other-uid', name: '編集者' },
+        updatedAt: serverTimestamp(),
+        updatedBy: { uid: 'editor-uid', name: '編集者' },
+      }),
+    );
+    await assertFails(
+      updateDoc(ref, {
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        updatedBy: { uid: 'editor-uid', name: '編集者' },
+      }),
+    );
+  });
+
+  it('余分なキーや足りない項目は拒否される', async () => {
+    const db = editorAuth().firestore();
+    await assertFails(setDoc(doc(db, `dajare/${seedId(16)}`), entry(seedId(16), { note: '余分' })));
+    const missing = entry(seedId(17));
+    delete (missing as { memo?: string }).memo;
+    await assertFails(setDoc(doc(db, `dajare/${seedId(17)}`), missing));
+  });
+
+  it('長さ超過とリスト要素の型違いは拒否される', async () => {
     const db = editorAuth().firestore();
     await assertFails(
-      setDoc(
-        doc(db, 'dajare/long'),
-        body('editor-uid', 'editor@example.com', { text: 'あ'.repeat(201) }),
-      ),
+      setDoc(doc(db, `dajare/${seedId(18)}`), entry(seedId(18), { text: 'あ'.repeat(201) })),
     );
     await assertFails(
       setDoc(
-        doc(db, 'dajare/too-many-tags'),
-        body('editor-uid', 'editor@example.com', {
+        doc(db, `dajare/${seedId(19)}`),
+        entry(seedId(19), {
           tags: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'],
         }),
       ),
+    );
+    await assertFails(
+      setDoc(doc(db, `dajare/${seedId(20)}`), entry(seedId(20), { tags: ['朝', 1] })),
+    );
+    await assertFails(setDoc(doc(db, `dajare/${seedId(21)}`), entry(seedId(21), { tags: [''] })));
+    await assertFails(
+      setDoc(doc(db, `dajare/${seedId(23)}`), entry(seedId(23), { tags: ['あ'.repeat(21)] })),
+    );
+    await assertFails(
+      setDoc(doc(db, `dajare/${seedId(24)}`), entry(seedId(24), { tags: ['朝\n夕'] })),
+    );
+  });
+
+  it('editors から外すと書けなくなる', async () => {
+    const db = editorAuth().firestore();
+    const id = seedId(22);
+    await assertSucceeds(setDoc(doc(db, `dajare/${id}`), entry(id)));
+    await env.withSecurityRulesDisabled(async (context) => {
+      await deleteDoc(doc(context.firestore(), 'editors/editor@example.com'));
+    });
+    await assertFails(
+      updateDoc(doc(db, `dajare/${id}`), {
+        text: 'もう書けない',
+        updatedAt: serverTimestamp(),
+        updatedBy: { uid: 'editor-uid', name: '編集者' },
+      }),
     );
   });
 
@@ -178,12 +335,31 @@ describe.skipIf(!emulatorUp)('firestore rules', () => {
     const self = editorAuth().firestore();
     await assertSucceeds(getDoc(doc(self, 'editors/editor@example.com')));
     const stranger = env
-      .authenticatedContext('stranger-uid', { email: 'stranger@example.com', email_verified: true })
+      .authenticatedContext('stranger-uid', {
+        email: 'stranger@example.com',
+        email_verified: true,
+        firebase: { sign_in_provider: 'google.com' },
+      })
       .firestore();
     await assertFails(getDoc(doc(stranger, 'editors/editor@example.com')));
     await assertFails(getDocs(collection(stranger, 'editors')));
-    await assertFails(setDoc(doc(self, 'editors/new@example.com'), { name: '追加' }));
+    await assertFails(setDoc(doc(self, 'editors/new@example.com'), { publicName: '追加' }));
     await assertFails(getDocs(collection(self, 'editors')));
+  });
+
+  it('移行の印は一度だけ作れて、消せない', async () => {
+    const db = editorAuth().firestore();
+    const ref = doc(db, 'meta/seedMigration');
+    await assertFails(setDoc(ref, { doneAt: new Date('2020-01-01T00:00:00Z') }));
+    await assertFails(setDoc(ref, {}));
+    await assertSucceeds(setDoc(ref, { doneAt: serverTimestamp() }));
+    await assertSucceeds(
+      getDoc(doc(env.unauthenticatedContext().firestore(), 'meta/seedMigration')),
+    );
+    await assertFails(setDoc(ref, { doneAt: serverTimestamp() }));
+    await assertFails(updateDoc(ref, { doneAt: serverTimestamp() }));
+    await assertFails(deleteDoc(ref));
+    await assertFails(setDoc(doc(db, 'meta/other'), { doneAt: serverTimestamp() }));
   });
 
   it('それ以外のパスは拒否される', async () => {
@@ -197,5 +373,89 @@ describe.skipIf(!emulatorUp)('FirestoreStore contract', () => {
   registerStoreContract(async () => {
     const db = editorAuth().firestore() as unknown as Firestore;
     return createFirestoreStore(db, () => actor);
+  });
+});
+
+describe.skipIf(!emulatorUp)('seed migration', () => {
+  function open() {
+    return createFirestoreStore(editorAuth().firestore() as unknown as Firestore, () => actor);
+  }
+
+  it('二度目は上書きせず、消した初期データは戻さない', async () => {
+    const store = open();
+    const first = pun(seedId(40), '一度目');
+    const second = pun(seedId(41), '二度目');
+    await waitFor(() => store.migrationPending());
+    const imported = await store.migrateSeed([first, second], actor);
+    expect(imported).toEqual({ added: 2, skipped: 0 });
+    await waitFor(() => !store.migrationPending());
+    const again = await store.migrateSeed(
+      [{ ...first, text: '上書きしてはいけない' }, second],
+      actor,
+    );
+    expect(again.added).toBe(0);
+    expect(again.skipped).toBe(2);
+    expect(await storedText(first.id)).toBe('一度目');
+    const removed = await store.remove(first.id);
+    expect(removed.ok).toBe(true);
+    await waitFor(() => store.getItems().every((item) => item.id !== first.id));
+    const third = await store.migrateSeed([first, second], actor);
+    expect(third.added).toBe(0);
+    expect(await storedText(first.id)).toBe('');
+    expect(await storedText(second.id)).toBe('二度目');
+  });
+
+  it('途中まで入っている移行を、ある紙を上書きせずに再開できる', async () => {
+    const store = open();
+    const kept = pun(seedId(42), '残す');
+    const added = pun(seedId(43), '足す');
+    await waitFor(() => store.migrationPending());
+    const created = await store.create(
+      {
+        text: kept.text,
+        scene: kept.scene,
+        addedAt: kept.addedAt,
+        addedAtNote: kept.addedAtNote,
+        reading: kept.reading,
+        source: kept.source,
+        rating: kept.rating,
+        favorite: kept.favorite,
+        tags: kept.tags,
+        speakers: kept.speakers,
+        memo: kept.memo,
+      },
+      actor,
+      kept.id,
+    );
+    expect(created.ok).toBe(true);
+    expect(store.migrationPending()).toBe(true);
+    const resumed = await store.migrateSeed(
+      [{ ...kept, text: '上書きしてはいけない' }, added],
+      actor,
+    );
+    expect(resumed.added).toBe(1);
+    expect(resumed.skipped).toBe(1);
+    expect(resumed.error).toBeUndefined();
+    expect(await storedText(kept.id)).toBe('残す');
+    expect(await storedText(added.id)).toBe('足す');
+    await waitFor(() => !store.migrationPending());
+  });
+
+  it('二人同時に流しても同じ紙は一つだけになる', async () => {
+    const left = open();
+    const right = open();
+    const first = pun(seedId(44), '同時A');
+    const second = pun(seedId(45), '同時B');
+    await waitFor(() => left.migrationPending() && right.migrationPending());
+    const [one, two] = await Promise.all([
+      left.migrateSeed([first, second], actor),
+      right.migrateSeed([first, second], actor),
+    ]);
+    expect(one.error).toBeUndefined();
+    expect(two.error).toBeUndefined();
+    expect(one.added + two.added).toBe(2);
+    expect(one.skipped + two.skipped).toBe(2);
+    expect(await storedText(first.id)).toBe('同時A');
+    expect(await storedText(second.id)).toBe('同時B');
   });
 });

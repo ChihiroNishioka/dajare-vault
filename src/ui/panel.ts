@@ -119,6 +119,7 @@ export function settingsPanel(prompt: boolean, canShare: boolean, canImport = tr
         <section>
           <h3>書き出す・読み込む</h3>
           <p>端末のあいだは自動では揃えない。JSONをやり取りする。</p>
+          <p>共有DBの無料プランには自動バックアップがありません。消した紙は戻せないので、定期的に JSON を書き出してください。</p>
           <div class="sheet-actions">
             <button type="button" class="primary" data-action="export">書き出す</button>
             ${canShare ? '<button type="button" data-action="share">共有シートで渡す</button>' : ''}
@@ -152,9 +153,23 @@ export function deletePanel(item: Dajare): string {
     <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <h2 id="panel-title">この紙を捨てますか</h2>
       <p class="confirm-text">${escapeHtml(preview)}</p>
-      <p>捨てると戻せません。書き出してあれば、そのファイルからは読めます。</p>
+      <p>捨てると戻せません。書き出してあれば、そのファイルからは読めます。共有DBの無料プランには自動バックアップがないので、消した紙はデータベースには残りません。</p>
       <div class="sheet-actions">
         <button type="button" class="danger" data-action="confirm-delete">削除する</button>
+        <button type="button" data-action="close-panel">やめる</button>
+      </div>
+    </div>
+  `;
+}
+
+export function confirmUploadPanel(): string {
+  return `
+    <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+      <h2 id="panel-title">この端末の紙を共有しますか</h2>
+      <p>送った内容は、URLを知っている人なら誰でも読めます。この端末の保存は、最初から入っている見本のこともあります。</p>
+      <p>すでにある紙は上書きしません。</p>
+      <div class="sheet-actions">
+        <button type="button" class="primary" data-action="confirm-upload">送る</button>
         <button type="button" data-action="close-panel">やめる</button>
       </div>
     </div>

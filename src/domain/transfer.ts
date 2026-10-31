@@ -157,22 +157,16 @@ function readActor(
   value: unknown,
   index: number,
   field: string,
-):
-  | { ok: true; actor: null | { uid: string; email: string; name: string } }
-  | { ok: false; error: string } {
+): { ok: true; actor: null | { uid: string; name: string } } | { ok: false; error: string } {
   if (value === undefined || value === null) return { ok: true, actor: null };
   if (!value || typeof value !== 'object') {
     return { ok: false, error: `items[${index}] の ${field} が不正です` };
   }
   const row = value as Record<string, unknown>;
-  if (
-    typeof row.uid !== 'string' ||
-    typeof row.email !== 'string' ||
-    typeof row.name !== 'string'
-  ) {
+  if (typeof row.uid !== 'string' || typeof row.name !== 'string' || !row.uid || !row.name) {
     return { ok: false, error: `items[${index}] の ${field} が不正です` };
   }
-  return { ok: true, actor: { uid: row.uid, email: row.email, name: row.name } };
+  return { ok: true, actor: { uid: row.uid, name: row.name } };
 }
 
 export function parseVault(

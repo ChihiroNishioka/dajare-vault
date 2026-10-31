@@ -4,18 +4,30 @@ export interface WriteResult {
   ok: boolean;
   item?: Dajare;
   error?: string;
+  errors?: { field: string; message: string }[];
 }
 
-/** ローカル保存と共有DBで同じ操作に見せるための窓口。 */
+export interface ImportTally {
+  added: number;
+  skipped: number;
+  error?: string;
+}
+
+/** ローカル保存と共有DBで同じ操作に見せるための窓口。呼び出し側は同期・非同期を区別しない。 */
 export interface DajareStore {
   subscribe(listener: (items: Dajare[]) => void): () => void;
   getItems(): Dajare[];
+  /** 共有DBの初期移行が終わっていないとき true。ローカルは常に false。 */
+  migrationPending(): boolean;
+  readError(): string | null;
   create(draft: DajareDraft, actor: Actor | null, id?: string): Promise<WriteResult>;
   update(id: string, draft: DajareDraft, actor: Actor | null): Promise<WriteResult>;
   remove(id: string): Promise<WriteResult>;
-  /** すでにある id は飛ばす。何回やっても同じ結果になる。 */
-  bulkImport(
-    items: Dajare[],
-    actor: Actor,
-  ): Promise<{ added: number; skipped: number; error?: string }>;
+  /** すでにある id は作らない。既存の本文は上書きしない。 */
+  bulkImport(items: Dajare[], actor: Actor): Promise<ImportTally>;
+  /**
+   * 初期データ用。無い id だけ作り、終わったら meta/seedMigration を作る。
+   * 印がすでにあるときは何も書かない（消した初期データは戻さない）。
+   */
+  migrateSeed(items: Dajare[], actor: Actor): Promise<ImportTally>;
 }
