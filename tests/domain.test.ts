@@ -7,9 +7,15 @@ import {
   applyImport,
   emptyDecisions,
   exportFilename,
+  hasOwnDeviceData,
+  importWriteSet,
   parseVault,
+  planDeviceUpload,
   planImport,
+  planSignature,
+  prepareImportCommit,
   serialize,
+  shouldMarkUploaded,
 } from '../src/domain/transfer';
 import { normalizeTags, validateDraft } from '../src/domain/validate';
 import { applyMigrations } from '../src/migrations/runner';
@@ -76,6 +82,10 @@ describe('validateDraft', () => {
   it('merges duplicate tags and stops at 10', () => {
     expect(normalizeTags([' 朝 ', '朝', '家族']).tags).toEqual(['朝', '家族']);
     expect(normalizeTags(['あ'.repeat(21)]).error).toMatch(/20文字/);
+    expect(normalizeTags(['😀'.repeat(20)]).error).toBeNull();
+    expect(normalizeTags(['😀'.repeat(21)]).error).toMatch(/20文字/);
+    expect(validateDraft(draft({ addedAt: '2026-04-31' })).ok).toBe(false);
+    expect(validateDraft(draft({ addedAt: '2026-11-31' })).ok).toBe(false);
     const tooMany = Array.from({ length: 11 }, (_, index) => `t${index}`);
     expect(normalizeTags(tooMany).error).toMatch(/10個/);
     expect(validateDraft(draft({ rating: 6 as unknown as 1 })).ok).toBe(false);
@@ -299,6 +309,58 @@ describe('transfer', () => {
     expect(overwritten.overwritten).toBe(1);
     expect(overwritten.items.find((row) => row.id === sample.id)?.text).toBe('書き直した');
     expect(overwritten.added).toBe(2);
+  });
+
+  it('uses the same ids for the confirmation and the write', () => {
+    const shared = [sample];
+    const fresh = item({ id: seedId(91), text: '別の件', scene: '別の場面' });
+    const incoming = [{ ...sample, text: '書き直した' }, fresh];
+    const shown = planImport(shared, incoming);
+    const decisions = {
+      idActions: { [sample.id]: 'overwrite' as const },
+      acceptTextSceneIds: [] as string[],
+    };
+    const prepared = prepareImportCommit(shared, incoming, shown, decisions);
+    expect(prepared.stale).toBe(false);
+    if (prepared.stale) return;
+    expect(prepared.createIds).toEqual([fresh.id]);
+    expect(prepared.updateIds).toEqual([sample.id]);
+    const applied = applyImport(shared, shown, decisions);
+    expect(applied.added).toBe(prepared.createIds.length);
+    expect(applied.overwritten).toBe(prepared.updateIds.length);
+    expect(applied.items.find((row) => row.id === fresh.id)?.text).toBe(fresh.text);
+    expect(applied.items.find((row) => row.id === sample.id)?.text).toBe('書き直した');
+
+    const localThatAlreadyHasFresh = [sample, fresh];
+    const againstLocal = planImport(localThatAlreadyHasFresh, incoming);
+    expect(planSignature(againstLocal)).not.toBe(planSignature(shown));
+    expect(importWriteSet(againstLocal, decisions).createIds).toEqual([]);
+
+    const drifted = prepareImportCommit(localThatAlreadyHasFresh, incoming, shown, decisions);
+    expect(drifted.stale).toBe(true);
+    if (!drifted.stale) return;
+    expect(importWriteSet(drifted.plan, decisions).createIds).not.toEqual(prepared.createIds);
+  });
+
+  it('sends only this device’s own puns, never a missing seed row', () => {
+    const seedIds = new Set([seedId(1), seedId(2)]);
+    const kept = item({ id: seedId(1), text: '見本', scene: '場面' });
+    const missing = item({ id: seedId(2), text: '消した見本', scene: '場面' });
+    const own = item({ id: seedId(90), text: '自分の', scene: '食卓' });
+    expect(hasOwnDeviceData([kept, missing], seedIds)).toBe(false);
+    expect(hasOwnDeviceData([kept, own], seedIds)).toBe(true);
+    const plan = planDeviceUpload([kept, missing, own], [kept], seedIds);
+    expect(plan.send.map((row) => row.id)).toEqual([own.id]);
+    expect(plan.seedMissing).toBe(1);
+    expect(plan.already).toBe(0);
+    const edited = { ...own, text: '直した' };
+    const clash = planDeviceUpload([edited], [own], seedIds);
+    expect(clash.send).toEqual([]);
+    expect(clash.already).toBe(1);
+    expect(clash.different).toBe(1);
+    expect(shouldMarkUploaded({ added: 0 })).toBe(false);
+    expect(shouldMarkUploaded({ added: 1 })).toBe(true);
+    expect(shouldMarkUploaded({ added: 1, error: 'だめ' })).toBe(false);
   });
 });
 

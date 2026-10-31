@@ -10,7 +10,9 @@ import {
   updateDoc,
   type Firestore,
 } from 'firebase/firestore';
+import { SEED_IDS } from '../data/seed-ids';
 import { timestampToIso } from '../domain/time';
+import { validateDraft } from '../domain/validate';
 import type { Actor, Dajare, DajareDraft } from '../types';
 import type { DajareStore, ImportTally } from '../store/dajare-store';
 
@@ -177,8 +179,13 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     person: Actor,
   ): Promise<'created' | 'skipped'> => {
     const ref = doc(db, COLLECTION, itemId);
+    const markerRef = doc(db, ...MIGRATION_PATH);
     return withContentionRetry(() =>
       runTransaction(db, async (tx) => {
+        if (SEED_IDS.has(itemId)) {
+          const marker = await tx.get(markerRef);
+          if (marker.exists()) return 'skipped';
+        }
         const snap = await tx.get(ref);
         if (snap.exists()) return 'skipped';
         tx.set(ref, createFields(itemId, draft, person));
@@ -214,16 +221,24 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     async create(draft, who, id) {
       const person = who ?? actor();
       if (!person) return { ok: false, error: 'ログインが必要です' };
+      const validated = validateDraft(draft);
+      if (!validated.ok) {
+        return {
+          ok: false,
+          error: validated.errors[0]?.message ?? '保存できませんでした',
+          errors: validated.errors,
+        };
+      }
       const itemId = id ?? crypto.randomUUID();
       try {
-        await setDoc(doc(db, COLLECTION, itemId), createFields(itemId, draft, person));
+        await setDoc(doc(db, COLLECTION, itemId), createFields(itemId, validated.value, person));
         const saved = items.find((row) => row.id === itemId);
         return saved
           ? { ok: true, item: saved }
           : {
               ok: true,
               item: dajareFromDoc(itemId, {
-                ...contentOf(draft),
+                ...contentOf(validated.value),
                 createdBy: publicActor(person),
                 updatedBy: publicActor(person),
               }),
@@ -235,11 +250,19 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     async update(id, draft, who) {
       const person = who ?? actor();
       if (!person) return { ok: false, error: 'ログインが必要です' };
+      const validated = validateDraft(draft);
+      if (!validated.ok) {
+        return {
+          ok: false,
+          error: validated.errors[0]?.message ?? '保存できませんでした',
+          errors: validated.errors,
+        };
+      }
       const previous = items.find((row) => row.id === id);
       if (!previous) return { ok: false, error: '見つかりませんでした' };
       try {
         await updateDoc(doc(db, COLLECTION, id), {
-          ...contentOf(draft),
+          ...contentOf(validated.value),
           updatedAt: serverTimestamp(),
           updatedBy: publicActor(person),
         });

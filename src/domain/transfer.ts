@@ -270,3 +270,112 @@ export const emptyDecisions = (): ImportDecisions => ({
   idActions: {},
   acceptTextSceneIds: [],
 });
+
+function idLine(items: { id: string }[]): string {
+  return items.map((item) => item.id).join('\n');
+}
+
+/** 確認画面と書き込みが同じ仕分けかを比べる。 */
+export function planSignature(plan: ImportPlan): string {
+  return [
+    idLine(plan.fresh),
+    idLine(plan.idConflicts.map((row) => row.incoming)),
+    idLine(plan.textSceneDupes.map((row) => row.incoming)),
+  ].join('\n---\n');
+}
+
+export function importWriteSet(
+  plan: ImportPlan,
+  decisions: ImportDecisions,
+): { createIds: string[]; updateIds: string[] } {
+  const updateIds = plan.idConflicts
+    .filter((row) => (decisions.idActions[row.incoming.id] ?? 'skip') === 'overwrite')
+    .map((row) => row.incoming.id);
+  const createIds = [
+    ...plan.fresh.map((item) => item.id),
+    ...plan.textSceneDupes
+      .filter((row) => decisions.acceptTextSceneIds.includes(row.incoming.id))
+      .map((row) => row.incoming.id),
+  ];
+  return { createIds, updateIds };
+}
+
+/**
+ * 確認画面を出したときの仕分けと、今の一覧が同じなら、その画面の id だけを書く。
+ * 違っていれば書き込まず、新しい確認を返す。
+ */
+export function prepareImportCommit(
+  existing: Dajare[],
+  incoming: Dajare[],
+  shown: ImportPlan,
+  decisions: ImportDecisions,
+):
+  | { stale: true; plan: ImportPlan }
+  | { stale: false; plan: ImportPlan; createIds: string[]; updateIds: string[] } {
+  const plan = planImport(existing, incoming);
+  if (planSignature(plan) !== planSignature(shown)) return { stale: true, plan };
+  return { stale: false, plan, ...importWriteSet(plan, decisions) };
+}
+
+export interface DeviceUploadPlan {
+  /** 見本以外で、共有DBにまだ無い紙。これだけ送る。 */
+  send: Dajare[];
+  /** 見本以外で、同じ id がすでにある件数。中身が違っても上書きしない。 */
+  already: number;
+  /** already のうち、本文などが違っている件数。 */
+  different: number;
+  /** この端末にある見本のうち、共有DBに無い件数。送らない。 */
+  seedMissing: number;
+}
+
+function contentKey(item: Dajare): string {
+  return JSON.stringify({
+    text: item.text,
+    scene: item.scene,
+    addedAt: item.addedAt,
+    addedAtNote: item.addedAtNote,
+    reading: item.reading,
+    source: item.source,
+    rating: item.rating,
+    favorite: item.favorite,
+    tags: item.tags,
+    speakers: item.speakers,
+    memo: item.memo,
+  });
+}
+
+/** 送るボタンは、見本以外の紙がこの端末にあるときだけ出す。 */
+export function hasOwnDeviceData(localItems: Dajare[], seedIds: ReadonlySet<string>): boolean {
+  return localItems.some((item) => !seedIds.has(item.id));
+}
+
+export function planDeviceUpload(
+  localItems: Dajare[],
+  sharedItems: Dajare[],
+  seedIds: ReadonlySet<string>,
+): DeviceUploadPlan {
+  const sharedById = new Map(sharedItems.map((item) => [item.id, item]));
+  const send: Dajare[] = [];
+  let already = 0;
+  let different = 0;
+  let seedMissing = 0;
+  for (const item of localItems) {
+    if (seedIds.has(item.id)) {
+      if (!sharedById.has(item.id)) seedMissing += 1;
+      continue;
+    }
+    const shared = sharedById.get(item.id);
+    if (!shared) {
+      send.push(item);
+      continue;
+    }
+    already += 1;
+    if (contentKey(item) !== contentKey(shared)) different += 1;
+  }
+  return { send, already, different, seedMissing };
+}
+
+/** 1件も足せなかった送信は、送り終わったことにしない。 */
+export function shouldMarkUploaded(result: { added: number; error?: string }): boolean {
+  return !result.error && result.added > 0;
+}

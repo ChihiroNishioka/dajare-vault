@@ -18,6 +18,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { createFirestoreStore } from '../src/cloud/firestore-store';
+import seedFile from '../src/data/seed.json';
 import { seedId } from '../src/domain/ids';
 import type { Dajare } from '../src/types';
 import { actor, registerStoreContract, sampleDraft } from './store-contract.cases';
@@ -439,6 +440,37 @@ describe.skipIf(!emulatorUp)('seed migration', () => {
     expect(await storedText(kept.id)).toBe('残す');
     expect(await storedText(added.id)).toBe('足す');
     await waitFor(() => !store.migrationPending());
+  });
+
+  it('印のあと、端末の送信で消した見本は戻らない', async () => {
+    const store = open();
+    const seedItems = (seedFile as { items: Dajare[] }).items.slice(0, 4);
+    const removed = seedItems[0];
+    const own = pun(seedId(500), 'この端末だけ');
+    if (!removed) throw new Error('missing seed');
+    await waitFor(() => store.migrationPending());
+    const migrated = await store.migrateSeed(seedItems, actor);
+    expect(migrated.added).toBe(seedItems.length);
+    expect(migrated.error).toBeUndefined();
+    await waitFor(() => !store.migrationPending());
+    expect((await store.remove(removed.id)).ok).toBe(true);
+    await waitFor(() => store.getItems().every((item) => item.id !== removed.id));
+    const sent = await store.bulkImport([...seedItems, own], actor);
+    expect(sent.error).toBeUndefined();
+    expect(sent.added).toBe(1);
+    expect(await storedText(removed.id)).toBe('');
+    expect(await storedText(own.id)).toBe('この端末だけ');
+    for (const kept of seedItems.slice(1)) {
+      expect(await storedText(kept.id)).toBe(kept.text);
+    }
+  });
+
+  it('ありえない日付は共有DBに書かない', async () => {
+    const store = open();
+    const id = seedId(80);
+    const result = await store.create({ ...sampleDraft(), addedAt: '2026-02-31' }, actor, id);
+    expect(result.ok).toBe(false);
+    expect(await storedText(id)).toBe('');
   });
 
   it('二人同時に流しても同じ紙は一つだけになる', async () => {

@@ -1,17 +1,22 @@
 import { backupNotice } from '../domain/backup';
 import {
   exportFilename,
+  hasOwnDeviceData,
   parseVault,
+  planDeviceUpload,
   planImport,
+  prepareImportCommit,
   serialize,
+  shouldMarkUploaded,
   type ImportDecisions,
   type ImportPlan,
 } from '../domain/transfer';
-import { LIMITS, READING_RE } from '../domain/validate';
+import { codePointLength, LIMITS, READING_RE } from '../domain/validate';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import type { DajareStore } from '../store/dajare-store';
 import { adaptLocalStore } from '../store/local-dajare-store';
 import { createStore, type Store } from '../store/store';
+import { SEED_IDS } from '../data/seed-ids';
 import seedFile from '../data/seed.json';
 import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
 import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
@@ -39,7 +44,7 @@ type Panel =
   | { kind: 'settings' }
   | { kind: 'import'; plan: ImportPlan; incoming: Dajare[] }
   | { kind: 'delete'; id: string }
-  | { kind: 'upload-local' }
+  | { kind: 'upload-local'; sendIds: string[] }
   | { kind: 'prompt' };
 
 const ui = {
@@ -56,7 +61,12 @@ let toastTimer = 0;
 
 const LOCAL_UPLOAD_KEY = 'dajareVault:uploadedLocal';
 
-export function mount(root: HTMLElement, store: Store = createStore(window.localStorage)): void {
+export function mount(
+  root: HTMLElement,
+  store: Store = createStore(window.localStorage, {
+    seedOnEmpty: !isFirebaseConfigured(firebaseConfig),
+  }),
+): void {
   const preview = isFirebaseConfigured(firebaseConfig)
     ? null
     : readPreviewActor(window.localStorage);
@@ -627,27 +637,33 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       return;
     }
     if (action === 'upload-local' && cloudStore && gate.user) {
-      ui.panel = { kind: 'upload-local' };
-      panel.innerHTML = confirmUploadPanel();
+      const upload = planDeviceUpload(store.getState().items, cloudStore.getItems(), SEED_IDS);
+      ui.panel = { kind: 'upload-local', sendIds: upload.send.map((item) => item.id) };
+      panel.innerHTML = confirmUploadPanel(upload);
       openPanel();
       return;
     }
-    if (action === 'confirm-upload' && cloudStore && gate.user) {
-      const raw = window.localStorage.getItem(DATA_KEY);
-      if (!raw) return;
-      let parsed: ReturnType<typeof parseVault>;
-      try {
-        parsed = parseVault(JSON.parse(raw) as unknown);
-      } catch {
-        showToast('この端末の保存を読めませんでした');
+    if (
+      action === 'confirm-upload' &&
+      ui.panel.kind === 'upload-local' &&
+      cloudStore &&
+      gate.user
+    ) {
+      const upload = planDeviceUpload(store.getState().items, cloudStore.getItems(), SEED_IDS);
+      const shown = ui.panel.sendIds.join('\n');
+      const now = upload.send.map((item) => item.id).join('\n');
+      if (shown !== now) {
+        ui.panel = { kind: 'upload-local', sendIds: upload.send.map((item) => item.id) };
+        panel.innerHTML = confirmUploadPanel(upload);
+        showToast('共有DBが変わったので、件数を見直してください');
         return;
       }
-      if (!parsed.ok) {
-        showToast(parsed.error);
+      if (upload.send.length === 0) {
+        showToast('新しく送る紙はありません');
         return;
       }
-      void cloudStore.bulkImport(parsed.items, gate.user).then((result) => {
-        if (!result.error) window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
+      void cloudStore.bulkImport(upload.send, gate.user).then((result) => {
+        if (shouldMarkUploaded(result)) window.localStorage.setItem(LOCAL_UPLOAD_KEY, '1');
         showToast(result.error ?? `${result.added}件を共有DBへ送りました`);
         closePanel();
         renderCloudNotes();
@@ -666,12 +682,26 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
         idActions: ui.idActions,
         acceptTextSceneIds: ui.acceptDupes,
       };
+      const prepared = prepareImportCommit(
+        active().getItems(),
+        ui.panel.incoming,
+        ui.panel.plan,
+        decisions,
+      );
+      if (prepared.stale) {
+        ui.idActions = {};
+        ui.acceptDupes = [];
+        ui.panel = { kind: 'import', plan: prepared.plan, incoming: ui.panel.incoming };
+        panel.innerHTML = importPanel(prepared.plan);
+        showToast('中身が変わったので、確認をやり直してください');
+        return;
+      }
       if (gate.mode === 'cloud' && cloudStore) {
         if (!gate.user) {
           showToast('編集者だけが共有できます');
           return;
         }
-        void commitCloud(cloudStore, ui.panel.incoming, decisions, gate.user).then((result) => {
+        void commitCloud(cloudStore, ui.panel.incoming, prepared, gate.user).then((result) => {
           if ('error' in result && result.error) {
             showToast(result.error);
             return;
@@ -702,7 +732,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
     const value = raw.trim();
     if (!value) return;
     if (kind === 'tags') {
-      if (value.length > LIMITS.tag) {
+      if (codePointLength(value) > LIMITS.tag) {
         showFormErrors([{ field: 'tags', message: `タグは${LIMITS.tag}文字までです` }]);
         return;
       }
@@ -712,7 +742,7 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       }
       if (!ui.draftTags.includes(value)) ui.draftTags = [...ui.draftTags, value];
     } else {
-      if (value.length > LIMITS.speaker) {
+      if (codePointLength(value) > LIMITS.speaker) {
         showFormErrors([{ field: 'speakers', message: `言った人は${LIMITS.speaker}文字までです` }]);
         return;
       }
@@ -756,15 +786,16 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
       showToast('JSONとして読めませんでした');
       return;
     }
-    const preview = store.previewImport(parsed);
-    if (!preview.ok || !preview.plan) {
-      showToast(preview.ok ? '読み込めませんでした' : preview.error);
+    const preview = parseVault(parsed);
+    if (!preview.ok) {
+      showToast(preview.error);
       return;
     }
+    const plan = planImport(active().getItems(), preview.items);
     ui.idActions = {};
     ui.acceptDupes = [];
-    ui.panel = { kind: 'import', plan: preview.plan, incoming: preview.items };
-    panel.innerHTML = importPanel(preview.plan);
+    ui.panel = { kind: 'import', plan, incoming: preview.items };
+    panel.innerHTML = importPanel(plan);
     openPanel();
   };
 
@@ -784,9 +815,12 @@ export function mount(root: HTMLElement, store: Store = createStore(window.local
         '<p>初期データの移行が終わっていません。途中まで入っているときは、足りない分だけ足します。</p><button type="button" data-action="seed-cloud">初期データを共有DBに入れる</button>',
       );
     }
-    if (window.localStorage.getItem(DATA_KEY) && !window.localStorage.getItem(LOCAL_UPLOAD_KEY)) {
+    if (
+      hasOwnDeviceData(store.getState().items, SEED_IDS) &&
+      !window.localStorage.getItem(LOCAL_UPLOAD_KEY)
+    ) {
       notes.push(
-        '<p>この端末に残っている紙があります。</p><button type="button" data-action="upload-local">この端末のデータを共有DBへ送る</button>',
+        '<p>この端末だけで書いた紙があります。</p><button type="button" data-action="upload-local">この端末のデータを共有DBへ送る</button>',
       );
     }
     slot.innerHTML = notes.length ? `<div class="cloud-note">${notes.join('')}</div>` : '';
@@ -857,33 +891,24 @@ function draftOf(item: Dajare): DajareDraft {
 async function commitCloud(
   cloud: DajareStore,
   incoming: Dajare[],
-  decisions: ImportDecisions,
+  write: { createIds: string[]; updateIds: string[] },
   actor: Actor,
 ): Promise<{ added: number; overwritten: number; skipped: number; error?: string }> {
-  const plan = planImport(cloud.getItems(), incoming);
+  const byId = new Map(incoming.map((item) => [item.id, item]));
   let added = 0;
   let overwritten = 0;
-  let skipped = 0;
-  for (const row of plan.idConflicts) {
-    if ((decisions.idActions[row.incoming.id] ?? 'skip') !== 'overwrite') {
-      skipped += 1;
-      continue;
-    }
-    const result = await cloud.update(row.incoming.id, draftOf(row.incoming), actor);
+  const skipped = incoming.length - write.createIds.length - write.updateIds.length;
+  for (const id of write.updateIds) {
+    const item = byId.get(id);
+    if (!item) return { added, overwritten, skipped, error: '見つかりませんでした' };
+    const result = await cloud.update(id, draftOf(item), actor);
     if (!result.ok) return { added, overwritten, skipped, error: result.error };
     overwritten += 1;
   }
-  for (const row of plan.textSceneDupes) {
-    if (!decisions.acceptTextSceneIds.includes(row.incoming.id)) {
-      skipped += 1;
-      continue;
-    }
-    const result = await cloud.create(draftOf(row.incoming), actor, row.incoming.id);
-    if (!result.ok) return { added, overwritten, skipped, error: result.error };
-    added += 1;
-  }
-  for (const item of plan.fresh) {
-    const result = await cloud.create(draftOf(item), actor, item.id);
+  for (const id of write.createIds) {
+    const item = byId.get(id);
+    if (!item) return { added, overwritten, skipped, error: '見つかりませんでした' };
+    const result = await cloud.create(draftOf(item), actor, id);
     if (!result.ok) return { added, overwritten, skipped, error: result.error };
     added += 1;
   }

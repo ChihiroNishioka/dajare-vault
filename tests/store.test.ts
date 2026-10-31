@@ -112,6 +112,13 @@ describe('createStore', () => {
     expect(store.getState().loadError).toBeNull();
   });
 
+  it('does not save the seed on an empty shared-mode device', () => {
+    const storage = memoryStorage();
+    const store = createStore(storage, { seed: tiny, seedOnEmpty: false });
+    expect(store.getState().items).toEqual([]);
+    expect(storage.dump()[DATA_KEY]).toBeUndefined();
+  });
+
   it('skips sample rows that are already stored', () => {
     const store = createStore(memoryStorage(), { seed: tiny });
     expect(store.loadSamples()).toEqual({ added: 0, skipped: 1 });

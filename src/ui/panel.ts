@@ -162,14 +162,24 @@ export function deletePanel(item: Dajare): string {
   `;
 }
 
-export function confirmUploadPanel(): string {
+export function confirmUploadPanel(counts: {
+  send: { length: number };
+  already: number;
+  different: number;
+  seedMissing: number;
+}): string {
+  const send =
+    counts.send.length > 0
+      ? `<button type="button" class="primary" data-action="confirm-upload">送る</button>`
+      : '';
   return `
     <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <h2 id="panel-title">この端末の紙を共有しますか</h2>
-      <p>送った内容は、URLを知っている人なら誰でも読めます。この端末の保存は、最初から入っている見本のこともあります。</p>
-      <p>すでにある紙は上書きしません。</p>
+      <p>この端末で書いた紙のうち、${counts.send.length}件を共有DBに送ります。送った内容は、URLを知っている人なら誰でも読めます。</p>
+      <p>すでに同じIDがある ${counts.already}件は飛ばします。中身が違う ${counts.different}件も上書きしません。</p>
+      <p>初期データで、共有DBに無い ${counts.seedMissing}件は送りません。消した見本は戻りません。</p>
       <div class="sheet-actions">
-        <button type="button" class="primary" data-action="confirm-upload">送る</button>
+        ${send}
         <button type="button" data-action="close-panel">やめる</button>
       </div>
     </div>

@@ -60,6 +60,8 @@ export interface StoreOptions {
   now?: () => Date;
   uuid?: () => string;
   seed?: VaultFile;
+  /** 空の端末に見本を書き込む。共有モードでは false。 */
+  seedOnEmpty?: boolean;
 }
 
 const SAVE_FAILED = '保存できませんでした。エクスポートしてください';
@@ -96,6 +98,7 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
   const now = options.now ?? (() => new Date());
   const uuid = options.uuid ?? (() => crypto.randomUUID());
   const seed = options.seed ?? (seedFile as VaultFile);
+  const seedOnEmpty = options.seedOnEmpty !== false;
   const listeners = new Set<() => void>();
 
   const state: StoreState = {
@@ -193,6 +196,8 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
       writesBlocked = false;
       brokenRaw = null;
       state.loadError = null;
+      state.items = [];
+      if (!seedOnEmpty) return;
       state.items = cloneSeed(seed);
       persist();
       return;
