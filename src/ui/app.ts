@@ -120,10 +120,15 @@ export function mount(
   let notionMode: 'idle' | 'running' | 'confirm' | 'done' = 'idle';
   let confirmArchive: ((ok: boolean) => void) | null = null;
   let lastNotionBackup: string | null = null;
-  const canNotion = (): boolean => {
-    if (headerChrome?.kind === 'signed-in') return headerChrome.editor && !dismissMockSignIn;
+  const signedIn = (): boolean => {
+    if (headerChrome?.kind === 'signed-in') return !dismissMockSignIn;
     if (headerChrome) return false;
-    return gate.mode === 'cloud' && gate.user !== null && gate.isEditor;
+    return gate.user !== null;
+  };
+  const canNotion = (): boolean => {
+    if (!signedIn()) return false;
+    if (headerChrome?.kind === 'signed-in') return headerChrome.editor;
+    return gate.mode === 'cloud' && gate.isEditor;
   };
   const notionBlock = (): BackupBlock | null =>
     backupBlockReason({
@@ -265,19 +270,25 @@ export function mount(
     root.querySelectorAll<HTMLElement>('[data-action="add"]').forEach((button) => {
       button.hidden = !canEdit();
     });
+    root.querySelectorAll<HTMLButtonElement>('[data-action="settings"]').forEach((button) => {
+      button.hidden = !signedIn();
+    });
     root.querySelectorAll<HTMLButtonElement>('[data-action="notion-backup"]').forEach((button) => {
       button.hidden = !canNotion();
       button.disabled = notionBusy || notionBlock() !== null;
     });
-    if (!canNotion() && ui.panel.kind === 'notion') {
+    const dropBackup =
+      (!signedIn() && ui.panel.kind === 'settings') || (!canNotion() && ui.panel.kind === 'notion');
+    if (dropBackup) {
       confirmArchive?.(false);
       confirmArchive = null;
+      const hash = ui.panel.kind === 'notion' ? '#notion' : '#settings';
       ui.panel = { kind: 'closed' };
       panel.innerHTML = '';
       panel.hidden = true;
       shellEl.toggleAttribute('inert', false);
       document.body.classList.remove('panel-open');
-      if (location.hash === '#notion') setBackupHash('');
+      if (location.hash === hash) setBackupHash('');
     }
     if (headerChrome?.kind === 'signed-out') {
       if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(true);
@@ -604,6 +615,10 @@ export function mount(
   };
 
   const openSettings = (): void => {
+    if (!signedIn()) {
+      if (location.hash === '#settings') setBackupHash('');
+      return;
+    }
     let canShare = false;
     try {
       canShare = Boolean(
@@ -749,6 +764,7 @@ export function mount(
       return;
     }
     if (action === 'settings') {
+      if (!signedIn()) return;
       openSettings();
       return;
     }
@@ -1166,6 +1182,7 @@ export function mount(
           syncAccount();
           renderResults();
           renderCloudNotes();
+          if (session.ready) applyBackupHash();
         });
         cloud.store.subscribe(() => {
           renderResults();
@@ -1178,6 +1195,7 @@ export function mount(
         showToast(cloudBootError);
         syncAccount();
         renderResults();
+        applyBackupHash();
       });
   }
 
@@ -1195,7 +1213,7 @@ export function mount(
   const applyBackupHash = (): void => {
     const hash = location.hash;
     if (hash !== '#settings' && hash !== '#notion') return;
-    if (hash === '#notion' && !canNotion()) {
+    if ((hash === '#settings' && !signedIn()) || (hash === '#notion' && !canNotion())) {
       setBackupHash('');
       return;
     }
@@ -1203,7 +1221,7 @@ export function mount(
     if (hash === '#notion') openNotionPanel();
   };
   window.addEventListener('hashchange', applyBackupHash);
-  applyBackupHash();
+  if (!(isFirebaseConfigured(firebaseConfig) && headerChrome === null)) applyBackupHash();
 }
 
 function chipHtml(id: string, values: string[]): string {
@@ -1265,7 +1283,7 @@ function shell(): string {
           <div class="mast-actions">
             <button type="button" class="add-button" data-action="add">追加</button>
             <button type="button" class="texty" data-action="notion-backup" hidden>Notionに保管</button>
-            <button type="button" class="texty" data-action="settings">保管</button>
+            <button type="button" class="texty" data-action="settings" hidden>保管</button>
           </div>
         </div>
       </header>

@@ -27,6 +27,8 @@ export interface CloudSession {
   user: Actor | null;
   emailVerified: boolean;
   isEditor: boolean;
+  /** 最初の認証結果が届いたあと true。届く前はログイン不明。 */
+  ready: boolean;
 }
 
 export interface CloudConnection {
@@ -60,7 +62,7 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
 
-  let session: CloudSession = { user: null, emailVerified: false, isEditor: false };
+  let session: CloudSession = { user: null, emailVerified: false, isEditor: false, ready: false };
   const listeners = new Set<(next: CloudSession) => void>();
   const emit = (): void => {
     for (const listener of listeners) listener(session);
@@ -68,7 +70,7 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
 
   const refreshEditor = async (user: User | null): Promise<void> => {
     if (!user || typeof user.email !== 'string' || user.email.length === 0) {
-      session = { user: null, emailVerified: false, isEditor: false };
+      session = { user: null, emailVerified: false, isEditor: false, ready: true };
       emit();
       return;
     }
@@ -91,6 +93,7 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
       user: { uid: user.uid, name },
       emailVerified: user.emailVerified,
       isEditor,
+      ready: true,
     };
     emit();
   };

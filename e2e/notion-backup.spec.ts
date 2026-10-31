@@ -24,21 +24,20 @@ async function settle(page: Page): Promise<void> {
   );
 }
 
-test('signed-out visitors can export JSON and cannot open Notion by hash', async ({ page }) => {
+test('signed-out visitors see neither backup and neither hash opens a panel', async ({ page }) => {
   await page.goto('/dajare-vault/');
   await expect(page).toHaveTitle('駄洒落保管庫');
-  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await page.goto('/dajare-vault/#settings');
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '保管', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page).not.toHaveURL(/#settings/);
   await page.goto('/dajare-vault/?view=notion-hash#notion');
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Notionに保管' })).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
   await page.goto('/dajare-vault/?mock=signed-out');
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
-  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await settle(page);
   await page.screenshot({ path: shot(page, 'signed_out'), animations: 'disabled' });
@@ -61,20 +60,31 @@ test('signed-in mock shows Notion backup to the left of 保管', async ({ page }
     .screenshot({ path: shot(page, 'buttons'), animations: 'disabled' });
 });
 
-test('logout hides Notion backup and a direct hash does not start it', async ({ page }) => {
+test('logout hides both backups immediately and a direct hash does not reopen them', async ({
+  page,
+}) => {
   await page.goto('/dajare-vault/?mock=editor');
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeVisible();
+  await page.goto('/dajare-vault/?mock=editor#settings');
+  await expect(page.getByRole('dialog')).toBeVisible();
   await page
     .locator('[data-action="sign-out"]')
     .evaluate((button: HTMLButtonElement) => button.click());
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
+  await expect(page).not.toHaveURL(/#/);
   let relayCalls = 0;
   await page.route('https://notion-backup.test/**', async (route) => {
     relayCalls += 1;
     await route.abort();
   });
+  await page.evaluate(() => {
+    location.hash = '#settings';
+  });
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page).not.toHaveURL(/#settings/);
   await page.evaluate(() => {
     location.hash = '#notion';
   });

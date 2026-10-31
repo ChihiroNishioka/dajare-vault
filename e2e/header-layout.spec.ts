@@ -136,7 +136,7 @@ test('signed-out header lines up', async ({ page }) => {
   await expect(page.getByRole('button', { name: '別の方法でログイン' })).toBeVisible();
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
-  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await expectHeaderLayout(page);
   await shot(page, 'signed_out');
