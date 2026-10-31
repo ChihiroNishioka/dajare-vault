@@ -1,4 +1,4 @@
-import { backupNotice } from '../domain/backup';
+import { visibleBackupNotice } from '../domain/backup';
 import {
   exportFilename,
   hasOwnDeviceData,
@@ -191,29 +191,35 @@ export function mount(
       minRating: ui.minRating,
       sort: ui.sort,
     });
-    const notice = backupNotice(state.meta, new Date());
+    const notice = visibleBackupNotice(signedIn(), state.meta, new Date());
     const cloudError = gate.mode === 'cloud' ? cloudStore?.readError() : null;
     const notReady = cloudError === CLOUD_NOT_READY;
     const bits = notReady
       ? []
-      : [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(Boolean);
+      : [notice?.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(
+          Boolean,
+        );
+    const broken = signedIn() ? store.exportBroken() : null;
     banner.replaceChildren();
-    banner.hidden = notReady;
-    if (!notReady) {
-      const line = document.createElement('span');
-      line.textContent = bits.join(' / ');
-      banner.append(line);
-    }
-    if (store.exportBroken()) {
-      const recover = document.createElement('button');
-      recover.type = 'button';
-      recover.dataset.action = 'export-broken';
-      recover.textContent = '読めなかった原文を書き出す';
-      banner.append(recover);
+    banner.hidden = notReady || (bits.length === 0 && !broken);
+    if (!banner.hidden) {
+      if (bits.length > 0) {
+        const line = document.createElement('span');
+        line.textContent = bits.join(' / ');
+        banner.append(line);
+      }
+      if (broken) {
+        const recover = document.createElement('button');
+        recover.type = 'button';
+        recover.dataset.action = 'export-broken';
+        recover.textContent = '読めなかった原文を書き出す';
+        banner.append(recover);
+      }
     }
     banner.classList.toggle(
       'is-warn',
-      !notReady && (notice.warn || Boolean(state.saveError) || Boolean(state.loadError)),
+      !banner.hidden &&
+        (Boolean(notice?.warn) || Boolean(state.saveError) || Boolean(state.loadError)),
     );
     const total = listedItems().length;
     const filtered = items.length !== total;
@@ -278,7 +284,11 @@ export function mount(
       button.disabled = notionBusy || notionBlock() !== null;
     });
     const dropBackup =
-      (!signedIn() && ui.panel.kind === 'settings') || (!canNotion() && ui.panel.kind === 'notion');
+      (!signedIn() &&
+        (ui.panel.kind === 'settings' ||
+          ui.panel.kind === 'prompt' ||
+          ui.panel.kind === 'import')) ||
+      (!canNotion() && ui.panel.kind === 'notion');
     if (dropBackup) {
       confirmArchive?.(false);
       confirmArchive = null;
@@ -289,6 +299,10 @@ export function mount(
       shellEl.toggleAttribute('inert', false);
       document.body.classList.remove('panel-open');
       if (location.hash === hash) setBackupHash('');
+    }
+    if (!signedIn() && /バックアップ|書き出し|最終保管|Notion/.test(toast.textContent ?? '')) {
+      toast.textContent = '';
+      window.clearTimeout(toastTimer);
     }
     if (headerChrome?.kind === 'signed-out') {
       if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(true);
@@ -415,7 +429,7 @@ export function mount(
   const afterWrite = (): void => {
     renderResults();
     renderChoices();
-    if (store.getState().meta.promptOnChange) {
+    if (signedIn() && store.getState().meta.promptOnChange) {
       ui.panel = { kind: 'prompt' };
       panel.innerHTML = promptPanel();
       openPanel();
@@ -465,6 +479,7 @@ export function mount(
   };
 
   const doExport = (): void => {
+    if (!signedIn()) return;
     const items = gate.mode === 'cloud' && cloudStore ? cloudStore.getItems() : store.exportItems();
     const filename = exportFilename(new Date());
     download(filename, serialize(items));
@@ -828,6 +843,7 @@ export function mount(
       return;
     }
     if (action === 'export-broken') {
+      if (!signedIn()) return;
       const raw = store.exportBroken();
       if (!raw) return;
       download(
@@ -868,6 +884,7 @@ export function mount(
       if (headerChrome && !cloudSignOut) {
         dismissMockSignIn = true;
         syncChrome();
+        renderResults();
         return;
       }
       void cloudSignOut?.();
@@ -1335,7 +1352,7 @@ function shell(): string {
         </aside>
         <main>
           <div id="cloud-notes"></div>
-          <div id="banner" class="banner"></div>
+          <div id="banner" class="banner" hidden></div>
           <p id="count" class="count-line" data-testid="count"></p>
           <div id="board"></div>
         </main>

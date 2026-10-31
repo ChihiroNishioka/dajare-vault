@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backupNotice } from '../src/domain/backup';
+import { backupNotice, visibleBackupNotice } from '../src/domain/backup';
 import { seedId } from '../src/domain/ids';
 import { timestampToIso } from '../src/domain/time';
 import { queryItems } from '../src/domain/query';
@@ -431,5 +431,12 @@ describe('backupNotice', () => {
         now,
       ).text,
     ).toContain('今日');
+  });
+
+  it('hides the status line until someone is signed in', () => {
+    const meta = { lastExportAt: null, changesSinceExport: 12, promptOnChange: false };
+    expect(visibleBackupNotice(false, meta, now)).toBeNull();
+    expect(visibleBackupNotice(true, meta, now)?.text).toContain('まだバックアップしていません');
+    expect(visibleBackupNotice(false, meta, now)).toBeNull();
   });
 });

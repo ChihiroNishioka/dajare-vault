@@ -29,6 +29,8 @@ test('signed-out visitors see neither backup and neither hash opens a panel', as
   await expect(page).toHaveTitle('駄洒落保管庫');
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
+  await expect(page.getByText('まだバックアップしていません')).toHaveCount(0);
+  await expect(page.locator('#banner')).toBeHidden();
   await page.goto('/dajare-vault/#settings');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#settings/);
@@ -39,6 +41,8 @@ test('signed-out visitors see neither backup and neither hash opens a panel', as
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
+  await expect(page.getByText('まだバックアップしていません')).toHaveCount(0);
+  await expect(page.locator('#banner')).toBeHidden();
   await settle(page);
   await page.screenshot({ path: shot(page, 'signed_out'), animations: 'disabled' });
 });
@@ -51,6 +55,8 @@ test('signed-in mock shows Notion backup to the left of 保管', async ({ page }
   const keep = page.getByRole('button', { name: '保管', exact: true });
   await expect(notion).toBeVisible();
   await expect(keep).toBeVisible();
+  await expect(page.getByText('まだバックアップしていません')).toBeVisible();
+  await expect(page.locator('#banner')).toBeVisible();
   const notionBox = await notion.boundingBox();
   const keepBox = await keep.boundingBox();
   expect(notionBox && keepBox && notionBox.x + notionBox.width <= keepBox.x + 1).toBe(true);
@@ -66,6 +72,7 @@ test('logout hides both backups immediately and a direct hash does not reopen th
   await page.goto('/dajare-vault/?mock=editor');
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeVisible();
+  await expect(page.getByText('まだバックアップしていません')).toBeVisible();
   await page.goto('/dajare-vault/?mock=editor#settings');
   await expect(page.getByRole('dialog')).toBeVisible();
   await page
@@ -74,7 +81,11 @@ test('logout hides both backups immediately and a direct hash does not reopen th
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
-  await expect(page).not.toHaveURL(/#/);
+  await expect(page.getByText('まだバックアップしていません')).toHaveCount(0);
+  await expect(page.getByText(/最後にバックアップ|最終保管|前回の Notion/)).toHaveCount(0);
+  await expect(page.locator('#banner')).toBeHidden();
+  await expect(page.locator('#toast')).toHaveText('');
+  await expect(page).toHaveURL(/mock=editor$/);
   let relayCalls = 0;
   await page.route('https://notion-backup.test/**', async (route) => {
     relayCalls += 1;
