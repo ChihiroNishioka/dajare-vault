@@ -136,7 +136,7 @@ test('signed-out header lines up', async ({ page }) => {
   await expect(page.getByRole('button', { name: '別の方法でログイン' })).toBeVisible();
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
-  await expect(page.getByRole('button', { name: '保管' })).toBeHidden();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await expectHeaderLayout(page);
   await shot(page, 'signed_out');
@@ -160,7 +160,7 @@ test('signed-in read-only header lines up', async ({ page }) => {
   await expect(page.locator('.account-name')).toHaveText('ちひろ');
   await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expectHeaderLayout(page);
   await shot(page, 'viewer');

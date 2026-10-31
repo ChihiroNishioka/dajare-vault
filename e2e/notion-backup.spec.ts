@@ -24,16 +24,22 @@ async function settle(page: Page): Promise<void> {
   );
 }
 
-test('signed-out visitors do not see backup and cannot open it by hash', async ({ page }) => {
-  await page.goto('/dajare-vault/#settings');
+test('signed-out visitors can export JSON and cannot open Notion by hash', async ({ page }) => {
+  await page.goto('/dajare-vault/');
   await expect(page).toHaveTitle('駄洒落保管庫');
-  await expect(page.getByRole('button', { name: '保管' })).toBeHidden();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
+  await page.goto('/dajare-vault/#settings');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '保管', exact: true })).toBeVisible();
+  await page.goto('/dajare-vault/?view=notion-hash#notion');
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page).not.toHaveURL(/#/);
+  await expect(page.getByRole('heading', { name: 'Notionに保管' })).toHaveCount(0);
+  await expect(page).not.toHaveURL(/#notion/);
   await page.goto('/dajare-vault/?mock=signed-out');
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
-  await expect(page.getByRole('button', { name: '保管' })).toBeHidden();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await settle(page);
   await page.screenshot({ path: shot(page, 'signed_out'), animations: 'disabled' });
 });
@@ -55,21 +61,39 @@ test('signed-in mock shows Notion backup to the left of 保管', async ({ page }
     .screenshot({ path: shot(page, 'buttons'), animations: 'disabled' });
 });
 
-test('logout hides backup immediately and a direct hash does not reopen it', async ({ page }) => {
-  await page.goto('/dajare-vault/?mock=editor#settings');
-  await expect(page.getByRole('dialog')).toBeVisible();
+test('logout hides Notion backup and a direct hash does not start it', async ({ page }) => {
+  await page.goto('/dajare-vault/?mock=editor');
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeVisible();
   await page
     .locator('[data-action="sign-out"]')
     .evaluate((button: HTMLButtonElement) => button.click());
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '保管' })).toBeHidden();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
-  await expect(page).not.toHaveURL(/#/);
+  let relayCalls = 0;
+  await page.route('https://notion-backup.test/**', async (route) => {
+    relayCalls += 1;
+    await route.abort();
+  });
   await page.evaluate(() => {
     location.hash = '#notion';
   });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
+  expect(relayCalls).toBe(0);
+});
+
+test('#notion opens the panel and does not start a backup', async ({ page }) => {
+  let relayCalls = 0;
+  await page.route('https://notion-backup.test/**', async (route) => {
+    relayCalls += 1;
+    await route.abort();
+  });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await expect(page.getByRole('heading', { name: 'Notionに保管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'はじめる' })).toBeVisible();
+  await expect(page.getByText(/送っています/)).toHaveCount(0);
+  expect(relayCalls).toBe(0);
 });
 
 test('backup reports progress and success through the mocked relay', async ({ page }) => {
@@ -98,7 +122,7 @@ test('backup reports progress and success through the mocked relay', async ({ pa
       return;
     }
     if (body.op === 'archive') {
-      await route.fulfill({ json: { archived: 2, pending: [], nextCursor: null } });
+      await route.fulfill({ json: { archived: 2, done: true, nextCursor: null } });
       return;
     }
     await route.fulfill({ json: { lastBackupAt: '2026-10-31T03:00:00.000Z' } });

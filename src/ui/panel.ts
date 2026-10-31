@@ -153,13 +153,24 @@ export function settingsPanel(
   `;
 }
 
-export function notionPanel(text: string, bad: boolean): string {
+export function notionPanel(mode: 'idle' | 'running' | 'confirm' | 'done', text: string): string {
+  const bad = mode === 'done' && text.startsWith('Notionへの保管が途中');
+  const start =
+    mode === 'idle'
+      ? '<button type="button" class="primary" data-action="notion-backup">はじめる</button>'
+      : '';
+  const go =
+    mode === 'confirm'
+      ? '<button type="button" class="primary" data-action="notion-confirm">続ける</button>'
+      : '';
   return `
     <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <h2 id="panel-title">Notionに保管</h2>
       <p class="${bad ? 'field-error' : ''}" data-notion-status>${escapeHtml(text)}</p>
       <div class="sheet-actions">
-        <button type="button" data-action="close-panel">閉じる</button>
+        ${start}
+        ${go}
+        <button type="button" data-action="close-panel">${mode === 'confirm' ? 'やめる' : '閉じる'}</button>
       </div>
     </div>
   `;

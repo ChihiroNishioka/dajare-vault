@@ -53,11 +53,6 @@ export interface BackupProgress {
   label: string;
 }
 
-interface ArchiveItem {
-  pageId: string;
-  dajareId: string;
-}
-
 async function postJson(
   relayUrl: string,
   token: string,
@@ -87,13 +82,34 @@ export async function runNotionBackup(options: {
   token: string;
   entries: NotionDajare[];
   fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
   onProgress?: (progress: BackupProgress) => void;
+  onConfirmArchive?: (wouldArchive: number) => Promise<boolean>;
+  onKnownBackup?: (iso: string) => void;
 }): Promise<BackupCounts> {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const entries = dedupeEntries(options.entries);
-  const post = (body: unknown) => postJson(options.relayUrl, options.token, body, fetchImpl);
-  const ensured = (await post({ op: 'ensure' })) as { databaseId?: string };
+  if (entries.length === 0) throw new Error('紙がありません');
+  const post = async (body: unknown) => {
+    for (;;) {
+      const payload = (await postJson(options.relayUrl, options.token, body, fetchImpl)) as {
+        retryAfterMs?: number;
+      };
+      if (payload?.retryAfterMs) {
+        await sleep(payload.retryAfterMs);
+        continue;
+      }
+      return payload;
+    }
+  };
+  const ensured = (await post({ op: 'ensure' })) as {
+    databaseId?: string;
+    lastBackupAt?: string | null;
+  };
   if (!ensured.databaseId) throw new Error('Notionのデータベースを用意できませんでした');
+  if (ensured.lastBackupAt) options.onKnownBackup?.(ensured.lastBackupAt);
   let created = 0;
   let updated = 0;
   let unchanged = 0;
@@ -105,18 +121,33 @@ export async function runNotionBackup(options: {
     label: notionProgress(done, entries.length),
   });
   for (const chunk of chunks) {
-    const tally = (await post({
-      op: 'upsert',
-      databaseId: ensured.databaseId,
-      entries: chunk,
-    })) as {
-      created?: number;
-      updated?: number;
-      unchanged?: number;
-    };
-    created += tally.created ?? 0;
-    updated += tally.updated ?? 0;
-    unchanged += tally.unchanged ?? 0;
+    let offset = 0;
+    let stalls = 0;
+    while (offset < chunk.length) {
+      const tally = (await post({ op: 'upsert', entries: chunk.slice(offset) })) as {
+        created?: number;
+        updated?: number;
+        unchanged?: number;
+        resumeFrom?: number;
+      };
+      created += tally.created ?? 0;
+      updated += tally.updated ?? 0;
+      unchanged += tally.unchanged ?? 0;
+      if (typeof tally.resumeFrom === 'number') {
+        if (tally.resumeFrom < 0 || offset + tally.resumeFrom > chunk.length) {
+          throw new Error('続きが分かりません');
+        }
+        if (tally.resumeFrom === 0) {
+          stalls += 1;
+          if (stalls > 3) throw new Error('続きが分かりません');
+          continue;
+        }
+        stalls = 0;
+        offset += tally.resumeFrom;
+        continue;
+      }
+      offset = chunk.length;
+    }
     done += chunk.length;
     options.onProgress?.({
       done,
@@ -126,23 +157,42 @@ export async function runNotionBackup(options: {
   }
   let archived = 0;
   let cursor: string | null = null;
-  let pending: ArchiveItem[] = [];
-  for (let round = 0; round < 100; round += 1) {
+  let confirm = false;
+  for (let round = 0; round < 400; round += 1) {
     const pass = (await post({
       op: 'archive',
-      databaseId: ensured.databaseId,
       liveIds: entries.map((entry) => entry.id),
       cursor,
-      pending,
-    })) as { archived?: number; pending?: ArchiveItem[]; nextCursor?: string | null };
+      confirmArchive: confirm,
+    })) as {
+      archived?: number;
+      nextCursor?: string | null;
+      done?: boolean;
+      counting?: boolean;
+      needConfirm?: boolean;
+      wouldArchive?: number;
+    };
+    if (pass.counting) {
+      if (!pass.nextCursor) throw new Error('しまっておく続きが分かりません');
+      cursor = pass.nextCursor;
+      continue;
+    }
+    if (pass.needConfirm) {
+      const ok = (await options.onConfirmArchive?.(pass.wouldArchive ?? 0)) ?? false;
+      if (!ok) throw new Error('しまっておく確認がありません');
+      confirm = true;
+      cursor = null;
+      continue;
+    }
     archived += pass.archived ?? 0;
-    pending = pass.pending ?? [];
-    cursor = pass.nextCursor ?? null;
-    if (pending.length === 0 && !cursor) break;
+    if (pass.done) {
+      const finished = (await post({ op: 'finish' })) as { lastBackupAt?: string };
+      if (!finished.lastBackupAt) throw new Error('最終保管の時刻を残せませんでした');
+      return { created, updated, unchanged, archived, lastBackupAt: finished.lastBackupAt };
+    }
+    if (!pass.nextCursor) throw new Error('しまっておく続きが分かりません');
+    confirm = true;
+    cursor = pass.nextCursor;
   }
-  const finished = (await post({ op: 'finish', databaseId: ensured.databaseId })) as {
-    lastBackupAt?: string;
-  };
-  if (!finished.lastBackupAt) throw new Error('最終保管の時刻を残せませんでした');
-  return { created, updated, unchanged, archived, lastBackupAt: finished.lastBackupAt };
+  throw new Error('しまっておく処理が終わりませんでした');
 }

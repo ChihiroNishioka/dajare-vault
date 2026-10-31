@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const roots = ['src', 'public', 'tests', 'e2e', 'scripts', '.github'];
+const roots = ['src', 'public', 'tests', 'e2e', 'scripts', '.github', 'docs', 'relay'];
 const extra = ['index.html', 'README.md', 'package.json'];
 const skip = new Set(['scripts/make-icons.mjs']);
 

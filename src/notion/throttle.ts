@@ -15,10 +15,37 @@ export function createLimiter(
   };
 }
 
+/** Worker の中で待つ上限。これより長い Retry-After はブラウザへ返す。 */
+export const MAX_INLINE_WAIT_MS = 3_000;
+export const MAX_CLIENT_WAIT_MS = 60_000;
+/** 認証の2回を残して、1呼び出しのサブリクエストを50未満に収める。 */
+export const NOTION_SUBREQUEST_BUDGET = 40;
+
 export function retryDelayMs(attempt: number, retryAfterHeader: string | null): number {
   const headerSeconds = retryAfterHeader ? Number(retryAfterHeader) : NaN;
   if (Number.isFinite(headerSeconds) && headerSeconds > 0) {
-    return Math.min(headerSeconds * 1000, 10_000);
+    return Math.min(headerSeconds * 1000, MAX_CLIENT_WAIT_MS);
   }
   return Math.min(400 * 2 ** attempt, 8_000);
+}
+
+export class RetryLater extends Error {
+  constructor(readonly ms: number) {
+    super('retry-later');
+  }
+}
+
+export class BudgetStop extends Error {
+  constructor() {
+    super('budget');
+  }
+}
+
+export class SubrequestBudget {
+  used = 0;
+  constructor(readonly limit = NOTION_SUBREQUEST_BUDGET) {}
+  take(): void {
+    if (this.used >= this.limit) throw new BudgetStop();
+    this.used += 1;
+  }
 }

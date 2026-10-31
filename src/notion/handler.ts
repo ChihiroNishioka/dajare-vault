@@ -1,6 +1,7 @@
 import { backupCors } from './cors';
-import type { ArchiveItem, NotionRelay } from './notion-api';
-import { dedupeEntries, type NotionDajare } from './plan';
+import type { NotionRelay } from './notion-api';
+import { dedupeEntries, isNotionId, type NotionDajare } from './plan';
+import { RetryLater } from './throttle';
 
 export interface BackupHandlerDeps {
   nowSec: () => number;
@@ -58,9 +59,8 @@ export async function handleNotionBackup(
   let identity: { email: string; uid: string };
   try {
     identity = await deps.verifyToken(idToken);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'ログインを確認できません';
-    return json({ error: message }, 401, cors);
+  } catch {
+    return json({ error: 'ログインを確認できません' }, 401, cors);
   }
   let editor = false;
   try {
@@ -78,47 +78,48 @@ export async function handleNotionBackup(
     return json({ error: '依頼の形が違います' }, 400, cors);
   }
   const row = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (
+    row.databaseId !== undefined &&
+    (typeof row.databaseId !== 'string' || !isNotionId(row.databaseId))
+  ) {
+    return json({ error: '依頼の形が違います' }, 400, cors);
+  }
+  if (row.pageId !== undefined && (typeof row.pageId !== 'string' || !isNotionId(row.pageId))) {
+    return json({ error: '依頼の形が違います' }, 400, cors);
+  }
+  if (row.pending !== undefined) return json({ error: '依頼の形が違います' }, 400, cors);
   try {
     if (row.op === 'ensure') return json(await deps.notion.ensure(), 200, cors);
     if (row.op === 'upsert') {
-      if (
-        typeof row.databaseId !== 'string' ||
-        !Array.isArray(row.entries) ||
-        row.entries.length > 20
-      ) {
+      if (!Array.isArray(row.entries) || row.entries.length === 0 || row.entries.length > 10) {
         return json({ error: '依頼の形が違います' }, 400, cors);
       }
       if (!row.entries.every(isEntry)) return json({ error: '依頼の形が違います' }, 400, cors);
-      return json(await deps.notion.upsert(row.databaseId, dedupeEntries(row.entries)), 200, cors);
+      return json(await deps.notion.upsert(dedupeEntries(row.entries)), 200, cors);
     }
     if (row.op === 'archive') {
-      if (
-        typeof row.databaseId !== 'string' ||
-        !Array.isArray(row.liveIds) ||
-        row.liveIds.length > 5000
-      ) {
-        return json({ error: '依頼の形が違います' }, 400, cors);
+      if (!Array.isArray(row.liveIds) || row.liveIds.length === 0 || row.liveIds.length > 5000) {
+        return json({ error: '紙の一覧が空です' }, 400, cors);
       }
-      const liveIds = row.liveIds.filter((id): id is string => typeof id === 'string');
-      const pending = Array.isArray(row.pending)
-        ? row.pending.filter(
-            (item): item is ArchiveItem =>
-              Boolean(item) &&
-              typeof item === 'object' &&
-              typeof (item as ArchiveItem).pageId === 'string' &&
-              typeof (item as ArchiveItem).dajareId === 'string',
-          )
-        : [];
+      const liveIds = row.liveIds.filter(
+        (id): id is string => typeof id === 'string' && id.length > 0,
+      );
+      if (liveIds.length === 0) return json({ error: '紙の一覧が空です' }, 400, cors);
       const cursor = typeof row.cursor === 'string' ? row.cursor : null;
-      return json(await deps.notion.archive(row.databaseId, liveIds, cursor, pending), 200, cors);
+      return json(
+        await deps.notion.archive(liveIds, cursor, row.confirmArchive === true),
+        200,
+        cors,
+      );
     }
     if (row.op === 'finish') {
-      if (typeof row.databaseId !== 'string')
-        return json({ error: '依頼の形が違います' }, 400, cors);
       const at = new Date(deps.nowSec() * 1000).toISOString();
-      return json(await deps.notion.finish(row.databaseId, at), 200, cors);
+      return json(await deps.notion.finish(at), 200, cors);
     }
   } catch (error) {
+    if (error instanceof RetryLater) {
+      return json({ retryAfterMs: error.ms, resume: true }, 200, cors);
+    }
     const message = error instanceof Error ? error.message : 'Notionへの保管に失敗しました';
     return json({ error: message }, 502, cors);
   }

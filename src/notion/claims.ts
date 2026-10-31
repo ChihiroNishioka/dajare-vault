@@ -15,12 +15,20 @@ export function readFirebaseClaims(
   if (row.iss !== iss) throw new Error('トークンの発行元が違います');
   if (typeof row.exp !== 'number' || row.exp <= nowSec)
     throw new Error('トークンの期限が切れています');
+  const skew = 5 * 60;
+  if (typeof row.iat !== 'number' || row.iat > nowSec + skew)
+    throw new Error('トークンの時刻が違います');
+  if (typeof row.auth_time !== 'number' || row.auth_time > nowSec + skew)
+    throw new Error('トークンの時刻が違います');
   if (row.email_verified !== true) throw new Error('メールが確認されていません');
   if (typeof row.email !== 'string' || row.email.length === 0)
     throw new Error('メールがありません');
-  const uid = typeof row.user_id === 'string' ? row.user_id : row.sub;
-  if (typeof uid !== 'string' || uid.length === 0) throw new Error('uid がありません');
-  return { email: row.email.toLowerCase(), uid };
+  const firebase = row.firebase as { sign_in_provider?: unknown } | undefined;
+  if (firebase?.sign_in_provider !== 'google.com')
+    throw new Error('Googleのログインではありません');
+  if (typeof row.sub !== 'string' || row.sub.length === 0) throw new Error('uid がありません');
+  if (row.user_id !== row.sub) throw new Error('uid がありません');
+  return { email: row.email.toLowerCase(), uid: row.sub };
 }
 
 function base64UrlToBytes(value: string): Uint8Array {
@@ -124,24 +132,39 @@ export async function verifyFirebaseIdToken(
 }
 
 let cachedCerts: { expiresAt: number; keys: Record<string, string> } | null = null;
+let lastKidRefresh = 0;
+
+export function resetCertCache(): void {
+  cachedCerts = null;
+  lastKidRefresh = 0;
+}
+
+async function fetchCerts(fetchImpl: typeof fetch, nowMs: number): Promise<Record<string, string>> {
+  const certHost = ['securetoken', 'system.gserviceaccount.com'].join('@');
+  const response = await fetchImpl(`https://www.googleapis.com/robot/v1/metadata/x509/${certHost}`);
+  if (!response.ok) throw new Error('ログインの公開鍵を読めません');
+  const keys = (await response.json()) as Record<string, string>;
+  const cacheControl = response.headers.get('cache-control') ?? '';
+  const maxAge = Number(cacheControl.match(/max-age=(\d+)/)?.[1] ?? 3600);
+  cachedCerts = { expiresAt: nowMs + maxAge * 1000, keys };
+  return keys;
+}
 
 export async function loadSecureTokenKey(
   kid: string,
   fetchImpl: typeof fetch,
   now = Date.now,
 ): Promise<CryptoKey> {
-  if (!cachedCerts || cachedCerts.expiresAt <= now()) {
-    const certHost = ['securetoken', 'system.gserviceaccount.com'].join('@');
-    const response = await fetchImpl(
-      `https://www.googleapis.com/robot/v1/metadata/x509/${certHost}`,
-    );
-    if (!response.ok) throw new Error('ログインの公開鍵を読めません');
-    const keys = (await response.json()) as Record<string, string>;
-    const cacheControl = response.headers.get('cache-control') ?? '';
-    const maxAge = Number(cacheControl.match(/max-age=(\d+)/)?.[1] ?? 3600);
-    cachedCerts = { expiresAt: now() + maxAge * 1000, keys };
+  const current = now();
+  if (!cachedCerts || cachedCerts.expiresAt <= current) {
+    await fetchCerts(fetchImpl, current);
   }
-  const pem = cachedCerts.keys[kid];
+  let pem = cachedCerts?.keys[kid];
+  if (!pem && current - lastKidRefresh >= 60_000) {
+    lastKidRefresh = current;
+    const keys = await fetchCerts(fetchImpl, current);
+    pem = keys[kid];
+  }
   if (!pem) throw new Error('トークンの鍵が見つかりません');
   return importRsaPublicKey(spkiFromCertificate(pemToDer(pem)));
 }

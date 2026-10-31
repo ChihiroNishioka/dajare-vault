@@ -36,6 +36,8 @@ export interface DajareStore {
   /** meta/seedMigration があるとき true。 */
   migrationDone(): boolean;
   readError(): string | null;
+  /** 共有DBをサーバーから一度読んだあと true。ローカルは常に true。 */
+  hasServerSnapshot(): boolean;
   create(draft: DajareDraft, actor: Actor | null, id?: string): Promise<WriteResult>;
   update(
     id: string,

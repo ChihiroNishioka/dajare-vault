@@ -173,6 +173,7 @@ async function refreshOneName(
 
 export function createFirestoreStore(db: Firestore, actor: () => Actor | null): DajareStore {
   let items: Dajare[] = [];
+  let serverReady = false;
   let migrationState: MigrationState = 'unknown';
   let listError: string | null = null;
   let markerError: string | null = null;
@@ -191,6 +192,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     collection(db, COLLECTION),
     (snap) => {
       items = snap.docs.map((row) => dajareFromDoc(row.id, row.data() as Record<string, unknown>));
+      if (!snap.metadata.fromCache) serverReady = true;
       listError = null;
       emit();
     },
@@ -259,6 +261,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     migrationPending: () => migrationState === 'pending',
     migrationDone: () => migrationState === 'done',
     readError,
+    hasServerSnapshot: () => serverReady,
     async create(draft, who, id) {
       const person = who ?? actor();
       if (!person) return { ok: false, error: 'ログインが必要です' };
