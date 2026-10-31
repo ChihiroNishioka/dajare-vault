@@ -19,6 +19,7 @@ import { createStore, type Store } from '../store/store';
 import { SEED_IDS } from '../data/seed-ids';
 import seedFile from '../data/seed.json';
 import { DATA_KEY, META_KEY, type Dajare, type DajareDraft } from '../types';
+import { CLOUD_NOT_READY } from '../cloud/messages';
 import { isFirebaseConfigured, firebaseConfig } from '../firebase-config';
 import { readPreviewActor } from '../session';
 import type { Actor } from '../types';
@@ -75,7 +76,10 @@ export function mount(
     user: preview,
     isEditor: true,
   };
-  const canEdit = (): boolean => gate.mode === 'local' || gate.isEditor;
+  const canEdit = (): boolean => {
+    if (cloudStore?.readError() === CLOUD_NOT_READY) return false;
+    return gate.mode === 'local' || gate.isEditor;
+  };
   let cloudStore: DajareStore | null = null;
   let cloudSignIn: (() => Promise<void>) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
@@ -129,9 +133,10 @@ export function mount(
     });
     const notice = backupNotice(state.meta, new Date());
     const cloudError = gate.mode === 'cloud' ? cloudStore?.readError() : null;
-    const bits = [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(
-      Boolean,
-    );
+    const notReady = cloudError === CLOUD_NOT_READY;
+    const bits = notReady
+      ? [CLOUD_NOT_READY]
+      : [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(Boolean);
     banner.replaceChildren();
     const line = document.createElement('span');
     line.textContent = bits.join(' / ');
@@ -149,8 +154,16 @@ export function mount(
     );
     const total = listedItems().length;
     const filtered = items.length !== total;
-    count.textContent = filtered ? `${items.length} / ${total}枚` : `${total}枚`;
+    count.textContent = notReady ? '' : filtered ? `${items.length} / ${total}枚` : `${total}枚`;
     board.replaceChildren();
+    if (notReady) {
+      const waiting = document.createElement('p');
+      waiting.className = 'empty-note';
+      waiting.textContent = CLOUD_NOT_READY;
+      board.append(waiting);
+      syncAccount();
+      return;
+    }
     if (items.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'empty-note';

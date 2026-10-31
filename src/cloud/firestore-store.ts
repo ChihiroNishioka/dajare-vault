@@ -10,6 +10,7 @@ import {
   updateDoc,
   type Firestore,
 } from 'firebase/firestore';
+import { CLOUD_NOT_READY } from './messages';
 import { SEED_IDS } from '../data/seed-ids';
 import { timestampToIso } from '../domain/time';
 import { validateDraft } from '../domain/validate';
@@ -141,22 +142,28 @@ function failureMessage(error: unknown, fallback: string): string {
 export function createFirestoreStore(db: Firestore, actor: () => Actor | null): DajareStore {
   let items: Dajare[] = [];
   let migrationState: MigrationState = 'unknown';
-  let readError: string | null = null;
+  let listError: string | null = null;
+  let markerError: string | null = null;
   const listeners = new Set<(next: Dajare[]) => void>();
 
   const emit = (): void => {
     for (const listener of listeners) listener(items);
   };
 
+  const listenError = (error: unknown, fallback: string): string =>
+    errorCode(error) === 'permission-denied' ? CLOUD_NOT_READY : fallback;
+
+  const readError = (): string | null => listError ?? markerError;
+
   onSnapshot(
     collection(db, COLLECTION),
     (snap) => {
       items = snap.docs.map((row) => dajareFromDoc(row.id, row.data() as Record<string, unknown>));
-      readError = null;
+      listError = null;
       emit();
     },
-    () => {
-      readError = '共有の紙を読めませんでした';
+    (error) => {
+      listError = listenError(error, '共有の紙を読めませんでした');
       emit();
     },
   );
@@ -165,10 +172,11 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     doc(db, ...MIGRATION_PATH),
     (snap) => {
       migrationState = snap.exists() ? 'done' : 'pending';
+      markerError = null;
       emit();
     },
-    () => {
-      readError = '共有の状態を読めませんでした';
+    (error) => {
+      markerError = listenError(error, '共有の状態を読めませんでした');
       emit();
     },
   );
@@ -217,7 +225,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
     },
     getItems: () => items,
     migrationPending: () => migrationState === 'pending',
-    readError: () => readError,
+    readError,
     async create(draft, who, id) {
       const person = who ?? actor();
       if (!person) return { ok: false, error: 'ログインが必要です' };

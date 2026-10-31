@@ -2,7 +2,7 @@
 
 共有に使うのは Authentication（Google）と Firestore だけです。Spark（無料）プランで足ります。Hosting は今までどおり GitHub Pages です。
 
-値が決まるまでは `src/firebase-config.ts` の `firebaseConfig` は `null` のままにしてください。そのあいだサイトは、今までどおりその端末の中だけに保存します。
+`src/firebase-config.ts` には、ブラウザに載せてよい Web 設定が入っています。秘密鍵ではありません。ルールを本番に入れるまでは、サイトは「まだ準備中です」と出します。テストと E2E は `VITE_FORCE_LOCAL=1` でビルドし、共有にはつながりません。
 
 ## 1. プロジェクトを作る
 

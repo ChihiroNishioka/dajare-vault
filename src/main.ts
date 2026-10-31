@@ -4,7 +4,7 @@ import { mount } from './ui/app';
 
 if (isFirebaseConfigured(firebaseConfig)) {
   void import('./cloud/connect').then(({ connectCloud }) => {
-    void connectCloud();
+    void connectCloud().catch(() => undefined);
   });
 }
 

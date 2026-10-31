@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const preview = 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort';
+const buildLocal = 'VITE_FORCE_LOCAL=1 npm run build';
 
 export default defineConfig({
   testDir: '.',
@@ -16,7 +17,7 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: process.env.CI ? preview : `npm run build && ${preview}`,
+    command: process.env.CI ? preview : `${buildLocal} && ${preview}`,
     url: 'http://127.0.0.1:4173/dajare-vault/',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
