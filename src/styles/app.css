@@ -568,6 +568,7 @@ dajare-card[data-cut='3'] .slip {
 }
 
 .empty-note {
+  column-span: all;
   font-family: var(--font-body);
   background: var(--card);
   padding: 1rem;
