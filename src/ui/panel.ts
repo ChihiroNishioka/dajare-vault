@@ -108,7 +108,12 @@ export function formPanel(
   `;
 }
 
-export function settingsPanel(prompt: boolean, canShare: boolean, canImport = true): string {
+export function settingsPanel(
+  prompt: boolean,
+  canShare: boolean,
+  canImport = true,
+  lastNotion: string | null = null,
+): string {
   return `
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <header class="sheet-head">
@@ -120,6 +125,7 @@ export function settingsPanel(prompt: boolean, canShare: boolean, canImport = tr
           <h3>書き出す・読み込む</h3>
           <p>端末のあいだは自動では揃えない。JSONをやり取りする。</p>
           <p>共有DBの無料プランには自動バックアップがありません。消した紙は戻せないので、定期的に JSON を書き出してください。</p>
+          ${lastNotion ? `<p>前回の Notion 保管: ${escapeHtml(lastNotion)}</p>` : ''}
           <div class="sheet-actions">
             <button type="button" class="primary" data-action="export">書き出す</button>
             ${canShare ? '<button type="button" data-action="share">共有シートで渡す</button>' : ''}
@@ -142,6 +148,18 @@ export function settingsPanel(prompt: boolean, canShare: boolean, canImport = tr
           </ol>
           <label class="check"><input id="prompt-on-change" type="checkbox" ${prompt ? 'checked' : ''} /> 変更のたびに書き出しをうながす</label>
         </section>
+      </div>
+    </div>
+  `;
+}
+
+export function notionPanel(text: string, bad: boolean): string {
+  return `
+    <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+      <h2 id="panel-title">Notionに保管</h2>
+      <p class="${bad ? 'field-error' : ''}" data-notion-status>${escapeHtml(text)}</p>
+      <div class="sheet-actions">
+        <button type="button" data-action="close-panel">閉じる</button>
       </div>
     </div>
   `;

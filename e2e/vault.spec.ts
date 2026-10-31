@@ -142,7 +142,8 @@ test('searches, filters, and sorts', async ({ page }) => {
 });
 
 test('exports json and shows the duplicate dialog on import', async ({ page }) => {
-  await page.getByRole('button', { name: '保管' }).click();
+  await page.goto('/dajare-vault/?mock=editor');
+  await page.getByRole('button', { name: '保管', exact: true }).click();
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '書き出す' }).click();
   const download = await downloadPromise;

@@ -42,8 +42,17 @@ import {
   changedAfterConfirmPanel,
   importPanel,
   promptPanel,
+  notionPanel,
   settingsPanel,
 } from './panel';
+import { runNotionBackup, toNotionEntry, notionRelayUrlForBackup } from '../notion/client';
+import {
+  NOTION_RELAY_MISSING,
+  formatBackupTime,
+  notionFailureMessage,
+  notionProgress,
+  notionSuccessMessage,
+} from '../notion/messages';
 import { defineStars } from './stars';
 
 defineCard();
@@ -53,6 +62,7 @@ type Panel =
   | { kind: 'closed' }
   | { kind: 'form'; mode: 'add' | 'edit'; id?: string }
   | { kind: 'settings' }
+  | { kind: 'notion' }
   | { kind: 'import'; plan: ImportPlan; incoming: Dajare[] }
   | { kind: 'delete'; id: string }
   | { kind: 'upload-local'; sendIds: string[] }
@@ -104,6 +114,20 @@ export function mount(
     ((container: HTMLElement, onStatus: (code: string) => void) => void) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
   let cloudBootError: string | null = null;
+  let dismissMockSignIn = false;
+  let notionBusy = false;
+  let lastNotionBackup: string | null = null;
+  const signedInNow = (): boolean => {
+    if (headerChrome?.kind === 'signed-in') return !dismissMockSignIn;
+    if (headerChrome) return false;
+    return gate.mode === 'cloud' && gate.user !== null;
+  };
+  const setBackupHash = (hash: '' | '#settings' | '#notion'): void => {
+    const next = `${location.pathname}${location.search}${hash}`;
+    if (`${location.pathname}${location.search}${location.hash}` !== next) {
+      history.replaceState(null, '', next);
+    }
+  };
   let nameRefresh: { done: number; total: number } | null = null;
   const localApi = adaptLocalStore(store);
   const active = (): DajareStore => (gate.mode === 'cloud' && cloudStore ? cloudStore : localApi);
@@ -231,6 +255,23 @@ export function mount(
     root.querySelectorAll<HTMLElement>('[data-action="add"]').forEach((button) => {
       button.hidden = !canEdit();
     });
+    const signedIn = signedInNow();
+    root
+      .querySelectorAll<HTMLButtonElement>(
+        '[data-action="settings"], [data-action="notion-backup"]',
+      )
+      .forEach((button) => {
+        button.hidden = !signedIn;
+        if (button.dataset.action === 'notion-backup') button.disabled = notionBusy;
+      });
+    if (!signedIn && (ui.panel.kind === 'settings' || ui.panel.kind === 'notion')) {
+      ui.panel = { kind: 'closed' };
+      panel.innerHTML = '';
+      panel.hidden = true;
+      shellEl.toggleAttribute('inert', false);
+      document.body.classList.remove('panel-open');
+      setBackupHash('');
+    }
     if (headerChrome?.kind === 'signed-out') {
       if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(true);
       return;
@@ -279,6 +320,7 @@ export function mount(
   const closePanel = (): void => {
     ui.panel = { kind: 'closed' };
     panel.innerHTML = '';
+    if (location.hash === '#settings' || location.hash === '#notion') setBackupHash('');
     syncChrome();
   };
 
@@ -521,6 +563,90 @@ export function mount(
         : 'シーンを書いてください';
   });
 
+  const showNotion = (text: string, bad: boolean): void => {
+    const existing = panel.querySelector<HTMLElement>('[data-notion-status]');
+    if (ui.panel.kind === 'notion' && existing) {
+      existing.textContent = text;
+      existing.classList.toggle('field-error', bad);
+      return;
+    }
+    ui.panel = { kind: 'notion' };
+    panel.innerHTML = notionPanel(text, bad);
+    openPanel();
+    setBackupHash('#notion');
+  };
+
+  const openSettings = (): void => {
+    let canShare = false;
+    try {
+      canShare = Boolean(
+        navigator.canShare?.({
+          files: [new File(['{}'], 'dajare.json', { type: 'application/json' })],
+        }),
+      );
+    } catch {
+      canShare = false;
+    }
+    ui.panel = { kind: 'settings' };
+    panel.innerHTML = settingsPanel(
+      store.getState().meta.promptOnChange,
+      canShare,
+      canEdit(),
+      lastNotionBackup ? formatBackupTime(lastNotionBackup) : null,
+    );
+    openPanel();
+    setBackupHash('#settings');
+  };
+
+  const backupAuthToken = async (): Promise<string> => {
+    if (import.meta.env.PROD && import.meta.env.VITE_FORCE_LOCAL !== '1') {
+      const { getAuth } = await import('firebase/auth');
+      const user = getAuth().currentUser;
+      if (!user) throw new Error('ログインが必要です');
+      return user.getIdToken();
+    }
+    try {
+      const { getAuth } = await import('firebase/auth');
+      const user = getAuth().currentUser;
+      if (user) return user.getIdToken();
+    } catch {
+      /* ローカルビルドでは Firebase を開かない */
+    }
+    return 'test-token';
+  };
+
+  const startNotionBackup = async (): Promise<void> => {
+    if (!signedInNow() || notionBusy) return;
+    const relayUrl = notionRelayUrlForBackup();
+    const entries = listedItems().map(toNotionEntry);
+    notionBusy = true;
+    syncAccount();
+    if (!relayUrl) {
+      showNotion(NOTION_RELAY_MISSING, true);
+      notionBusy = false;
+      syncAccount();
+      return;
+    }
+    showNotion(notionProgress(0, entries.length), false);
+    try {
+      const token = await backupAuthToken();
+      const result = await runNotionBackup({
+        relayUrl,
+        token,
+        entries,
+        onProgress: (progress) => showNotion(progress.label, false),
+      });
+      lastNotionBackup = result.lastBackupAt;
+      showNotion(notionSuccessMessage(result), false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Notionへの保管に失敗しました';
+      showNotion(notionFailureMessage(message), true);
+    } finally {
+      notionBusy = false;
+      syncAccount();
+    }
+  };
+
   root.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
     const actionEl = target.closest<HTMLElement>(
@@ -578,19 +704,13 @@ export function mount(
       return;
     }
     if (action === 'settings') {
-      ui.panel = { kind: 'settings' };
-      let canShare = false;
-      try {
-        canShare = Boolean(
-          navigator.canShare?.({
-            files: [new File(['{}'], 'dajare.json', { type: 'application/json' })],
-          }),
-        );
-      } catch {
-        canShare = false;
-      }
-      panel.innerHTML = settingsPanel(store.getState().meta.promptOnChange, canShare, canEdit());
-      openPanel();
+      if (!signedInNow()) return;
+      openSettings();
+      return;
+    }
+    if (action === 'notion-backup') {
+      if (!signedInNow() || notionBusy) return;
+      void startNotionBackup();
       return;
     }
     if (action === 'close-panel') {
@@ -680,6 +800,11 @@ export function mount(
       return;
     }
     if (action === 'sign-out') {
+      if (headerChrome && !cloudSignOut) {
+        dismissMockSignIn = true;
+        syncChrome();
+        return;
+      }
       void cloudSignOut?.();
       return;
     }
@@ -1018,6 +1143,18 @@ export function mount(
   renderChoices();
   renderResults();
   syncChrome();
+  const applyBackupHash = (): void => {
+    const hash = location.hash;
+    if (hash !== '#settings' && hash !== '#notion') return;
+    if (!signedInNow()) {
+      setBackupHash('');
+      return;
+    }
+    if (hash === '#settings') openSettings();
+    if (hash === '#notion') void startNotionBackup();
+  };
+  window.addEventListener('hashchange', applyBackupHash);
+  applyBackupHash();
 }
 
 function chipHtml(id: string, values: string[]): string {
@@ -1078,7 +1215,8 @@ function shell(): string {
           <div id="account" class="account"></div>
           <div class="mast-actions">
             <button type="button" class="add-button" data-action="add">追加</button>
-            <button type="button" class="texty" data-action="settings">保管</button>
+            <button type="button" class="texty" data-action="notion-backup" hidden>Notionに保管</button>
+            <button type="button" class="texty" data-action="settings" hidden>保管</button>
           </div>
         </div>
       </header>
