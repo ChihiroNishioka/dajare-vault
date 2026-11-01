@@ -1,4 +1,4 @@
-import { backupNotice } from '../domain/backup';
+import { visibleBackupNotice } from '../domain/backup';
 import {
   exportFilename,
   hasOwnDeviceData,
@@ -42,8 +42,18 @@ import {
   changedAfterConfirmPanel,
   importPanel,
   promptPanel,
+  notionPanel,
   settingsPanel,
 } from './panel';
+import { runNotionBackup, toNotionEntry, notionRelayUrlForBackup } from '../notion/client';
+import { backupBlockReason, type BackupBlock } from '../notion/plan';
+import {
+  NOTION_RELAY_MISSING,
+  formatBackupTime,
+  notionFailureMessage,
+  notionProgress,
+  notionSuccessMessage,
+} from '../notion/messages';
 import { defineStars } from './stars';
 
 defineCard();
@@ -53,6 +63,7 @@ type Panel =
   | { kind: 'closed' }
   | { kind: 'form'; mode: 'add' | 'edit'; id?: string }
   | { kind: 'settings' }
+  | { kind: 'notion' }
   | { kind: 'import'; plan: ImportPlan; incoming: Dajare[] }
   | { kind: 'delete'; id: string }
   | { kind: 'upload-local'; sendIds: string[] }
@@ -104,6 +115,34 @@ export function mount(
     ((container: HTMLElement, onStatus: (code: string) => void) => void) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
   let cloudBootError: string | null = null;
+  let dismissMockSignIn = false;
+  let notionBusy = false;
+  let notionMode: 'idle' | 'running' | 'confirm' | 'done' = 'idle';
+  let confirmArchive: ((ok: boolean) => void) | null = null;
+  let lastNotionBackup: string | null = null;
+  const signedIn = (): boolean => {
+    if (headerChrome?.kind === 'signed-in') return !dismissMockSignIn;
+    if (headerChrome) return false;
+    return gate.user !== null;
+  };
+  const canNotion = (): boolean => {
+    if (!signedIn()) return false;
+    if (headerChrome?.kind === 'signed-in') return headerChrome.editor;
+    return gate.mode === 'cloud' && gate.isEditor;
+  };
+  const notionBlock = (): BackupBlock | null =>
+    backupBlockReason({
+      mode: gate.mode === 'cloud' ? 'cloud' : 'local',
+      serverReady: cloudStore ? cloudStore.hasServerSnapshot() : gate.mode !== 'cloud',
+      readError: cloudStore?.readError() ?? null,
+      count: listedItems().length,
+    });
+  const setBackupHash = (hash: '' | '#settings' | '#notion'): void => {
+    const next = `${location.pathname}${location.search}${hash}`;
+    if (`${location.pathname}${location.search}${location.hash}` !== next) {
+      history.replaceState(null, '', next);
+    }
+  };
   let nameRefresh: { done: number; total: number } | null = null;
   const localApi = adaptLocalStore(store);
   const active = (): DajareStore => (gate.mode === 'cloud' && cloudStore ? cloudStore : localApi);
@@ -152,29 +191,35 @@ export function mount(
       minRating: ui.minRating,
       sort: ui.sort,
     });
-    const notice = backupNotice(state.meta, new Date());
+    const notice = visibleBackupNotice(signedIn(), state.meta, new Date());
     const cloudError = gate.mode === 'cloud' ? cloudStore?.readError() : null;
     const notReady = cloudError === CLOUD_NOT_READY;
     const bits = notReady
       ? []
-      : [notice.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(Boolean);
+      : [notice?.text, state.loadError, state.saveError, cloudError, cloudBootError].filter(
+          Boolean,
+        );
+    const broken = signedIn() ? store.exportBroken() : null;
     banner.replaceChildren();
-    banner.hidden = notReady;
-    if (!notReady) {
-      const line = document.createElement('span');
-      line.textContent = bits.join(' / ');
-      banner.append(line);
-    }
-    if (store.exportBroken()) {
-      const recover = document.createElement('button');
-      recover.type = 'button';
-      recover.dataset.action = 'export-broken';
-      recover.textContent = '読めなかった原文を書き出す';
-      banner.append(recover);
+    banner.hidden = notReady || (bits.length === 0 && !broken);
+    if (!banner.hidden) {
+      if (bits.length > 0) {
+        const line = document.createElement('span');
+        line.textContent = bits.join(' / ');
+        banner.append(line);
+      }
+      if (broken) {
+        const recover = document.createElement('button');
+        recover.type = 'button';
+        recover.dataset.action = 'export-broken';
+        recover.textContent = '読めなかった原文を書き出す';
+        banner.append(recover);
+      }
     }
     banner.classList.toggle(
       'is-warn',
-      !notReady && (notice.warn || Boolean(state.saveError) || Boolean(state.loadError)),
+      !banner.hidden &&
+        (Boolean(notice?.warn) || Boolean(state.saveError) || Boolean(state.loadError)),
     );
     const total = listedItems().length;
     const filtered = items.length !== total;
@@ -231,6 +276,34 @@ export function mount(
     root.querySelectorAll<HTMLElement>('[data-action="add"]').forEach((button) => {
       button.hidden = !canEdit();
     });
+    root.querySelectorAll<HTMLButtonElement>('[data-action="settings"]').forEach((button) => {
+      button.hidden = !signedIn();
+    });
+    root.querySelectorAll<HTMLButtonElement>('[data-action="notion-backup"]').forEach((button) => {
+      button.hidden = !canNotion();
+      button.disabled = notionBusy || notionBlock() !== null;
+    });
+    const dropBackup =
+      (!signedIn() &&
+        (ui.panel.kind === 'settings' ||
+          ui.panel.kind === 'prompt' ||
+          ui.panel.kind === 'import')) ||
+      (!canNotion() && ui.panel.kind === 'notion');
+    if (dropBackup) {
+      confirmArchive?.(false);
+      confirmArchive = null;
+      const hash = ui.panel.kind === 'notion' ? '#notion' : '#settings';
+      ui.panel = { kind: 'closed' };
+      panel.innerHTML = '';
+      panel.hidden = true;
+      shellEl.toggleAttribute('inert', false);
+      document.body.classList.remove('panel-open');
+      if (location.hash === hash) setBackupHash('');
+    }
+    if (!signedIn() && /バックアップ|書き出し|最終保管|Notion/.test(toast.textContent ?? '')) {
+      toast.textContent = '';
+      window.clearTimeout(toastTimer);
+    }
     if (headerChrome?.kind === 'signed-out') {
       if (!slot.querySelector('#gsi-button')) slot.innerHTML = signedOutHtml(true);
       return;
@@ -277,8 +350,11 @@ export function mount(
   };
 
   const closePanel = (): void => {
+    confirmArchive?.(false);
+    confirmArchive = null;
     ui.panel = { kind: 'closed' };
     panel.innerHTML = '';
+    if (location.hash === '#settings' || location.hash === '#notion') setBackupHash('');
     syncChrome();
   };
 
@@ -353,7 +429,7 @@ export function mount(
   const afterWrite = (): void => {
     renderResults();
     renderChoices();
-    if (store.getState().meta.promptOnChange) {
+    if (signedIn() && store.getState().meta.promptOnChange) {
       ui.panel = { kind: 'prompt' };
       panel.innerHTML = promptPanel();
       openPanel();
@@ -403,6 +479,7 @@ export function mount(
   };
 
   const doExport = (): void => {
+    if (!signedIn()) return;
     const items = gate.mode === 'cloud' && cloudStore ? cloudStore.getItems() : store.exportItems();
     const filename = exportFilename(new Date());
     download(filename, serialize(items));
@@ -521,6 +598,130 @@ export function mount(
         : 'シーンを書いてください';
   });
 
+  const blockText = (block: BackupBlock): string => {
+    if (block === 'loading') return '共有の紙を読み終えてから保管します';
+    if (block === 'empty') return '紙が無いので保管しません';
+    return '共有の紙を読めないので保管しません';
+  };
+
+  const showNotion = (mode: 'idle' | 'running' | 'confirm' | 'done', text: string): void => {
+    const existing = panel.querySelector<HTMLElement>('[data-notion-status]');
+    if (ui.panel.kind === 'notion' && notionMode === mode && existing) {
+      existing.textContent = text;
+      return;
+    }
+    notionMode = mode;
+    ui.panel = { kind: 'notion' };
+    panel.innerHTML = notionPanel(mode, text);
+    openPanel();
+    setBackupHash('#notion');
+  };
+
+  const openNotionPanel = (): void => {
+    if (!canNotion()) {
+      if (location.hash === '#notion') setBackupHash('');
+      return;
+    }
+    const block = notionBlock();
+    showNotion(
+      'idle',
+      block ? blockText(block) : '紙を Notion に控えます。消えた紙の行はしまって残します。',
+    );
+  };
+
+  const openSettings = (): void => {
+    if (!signedIn()) {
+      if (location.hash === '#settings') setBackupHash('');
+      return;
+    }
+    let canShare = false;
+    try {
+      canShare = Boolean(
+        navigator.canShare?.({
+          files: [new File(['{}'], 'dajare.json', { type: 'application/json' })],
+        }),
+      );
+    } catch {
+      canShare = false;
+    }
+    ui.panel = { kind: 'settings' };
+    panel.innerHTML = settingsPanel(
+      store.getState().meta.promptOnChange,
+      canShare,
+      canEdit(),
+      lastNotionBackup ? formatBackupTime(lastNotionBackup) : null,
+    );
+    openPanel();
+    setBackupHash('#settings');
+  };
+
+  const backupAuthToken = async (): Promise<string> => {
+    if (import.meta.env.PROD && import.meta.env.VITE_FORCE_LOCAL !== '1') {
+      const { getAuth } = await import('firebase/auth');
+      const user = getAuth().currentUser;
+      if (!user) throw new Error('ログインが必要です');
+      return user.getIdToken();
+    }
+    try {
+      const { getAuth } = await import('firebase/auth');
+      const user = getAuth().currentUser;
+      if (user) return user.getIdToken();
+    } catch {
+      /* ローカルビルドでは Firebase を開かない */
+    }
+    return 'test-token';
+  };
+
+  const startNotionBackup = async (): Promise<void> => {
+    if (!canNotion() || notionBusy) return;
+    const block = notionBlock();
+    if (block) {
+      showNotion('idle', blockText(block));
+      return;
+    }
+    const relayUrl = notionRelayUrlForBackup();
+    const entries = listedItems().map(toNotionEntry);
+    if (entries.length === 0) {
+      showNotion('idle', blockText('empty'));
+      return;
+    }
+    notionBusy = true;
+    syncAccount();
+    if (!relayUrl) {
+      showNotion('done', NOTION_RELAY_MISSING);
+      notionBusy = false;
+      syncAccount();
+      return;
+    }
+    showNotion('running', notionProgress(0, entries.length));
+    try {
+      const token = await backupAuthToken();
+      const result = await runNotionBackup({
+        relayUrl,
+        token,
+        entries,
+        onProgress: (progress) => showNotion('running', progress.label),
+        onKnownBackup: (iso) => {
+          lastNotionBackup = iso;
+        },
+        onConfirmArchive: (wouldArchive) =>
+          new Promise((resolve) => {
+            confirmArchive = resolve;
+            showNotion('confirm', `${wouldArchive}件をNotionでしまします。続けますか？`);
+          }),
+      });
+      lastNotionBackup = result.lastBackupAt;
+      showNotion('done', notionSuccessMessage(result));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Notionへの保管に失敗しました';
+      showNotion('done', notionFailureMessage(message));
+    } finally {
+      notionBusy = false;
+      confirmArchive = null;
+      syncAccount();
+    }
+  };
+
   root.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
     const actionEl = target.closest<HTMLElement>(
@@ -578,19 +779,18 @@ export function mount(
       return;
     }
     if (action === 'settings') {
-      ui.panel = { kind: 'settings' };
-      let canShare = false;
-      try {
-        canShare = Boolean(
-          navigator.canShare?.({
-            files: [new File(['{}'], 'dajare.json', { type: 'application/json' })],
-          }),
-        );
-      } catch {
-        canShare = false;
-      }
-      panel.innerHTML = settingsPanel(store.getState().meta.promptOnChange, canShare, canEdit());
-      openPanel();
+      if (!signedIn()) return;
+      openSettings();
+      return;
+    }
+    if (action === 'notion-backup') {
+      if (!canNotion() || notionBusy) return;
+      void startNotionBackup();
+      return;
+    }
+    if (action === 'notion-confirm') {
+      confirmArchive?.(true);
+      confirmArchive = null;
       return;
     }
     if (action === 'close-panel') {
@@ -643,6 +843,7 @@ export function mount(
       return;
     }
     if (action === 'export-broken') {
+      if (!signedIn()) return;
       const raw = store.exportBroken();
       if (!raw) return;
       download(
@@ -680,6 +881,12 @@ export function mount(
       return;
     }
     if (action === 'sign-out') {
+      if (headerChrome && !cloudSignOut) {
+        dismissMockSignIn = true;
+        syncChrome();
+        renderResults();
+        return;
+      }
       void cloudSignOut?.();
       return;
     }
@@ -992,6 +1199,7 @@ export function mount(
           syncAccount();
           renderResults();
           renderCloudNotes();
+          if (session.ready) applyBackupHash();
         });
         cloud.store.subscribe(() => {
           renderResults();
@@ -1004,6 +1212,7 @@ export function mount(
         showToast(cloudBootError);
         syncAccount();
         renderResults();
+        applyBackupHash();
       });
   }
 
@@ -1018,6 +1227,18 @@ export function mount(
   renderChoices();
   renderResults();
   syncChrome();
+  const applyBackupHash = (): void => {
+    const hash = location.hash;
+    if (hash !== '#settings' && hash !== '#notion') return;
+    if ((hash === '#settings' && !signedIn()) || (hash === '#notion' && !canNotion())) {
+      setBackupHash('');
+      return;
+    }
+    if (hash === '#settings') openSettings();
+    if (hash === '#notion') openNotionPanel();
+  };
+  window.addEventListener('hashchange', applyBackupHash);
+  if (!(isFirebaseConfigured(firebaseConfig) && headerChrome === null)) applyBackupHash();
 }
 
 function chipHtml(id: string, values: string[]): string {
@@ -1078,7 +1299,8 @@ function shell(): string {
           <div id="account" class="account"></div>
           <div class="mast-actions">
             <button type="button" class="add-button" data-action="add">追加</button>
-            <button type="button" class="texty" data-action="settings">保管</button>
+            <button type="button" class="texty" data-action="notion-backup" hidden>Notionに保管</button>
+            <button type="button" class="texty" data-action="settings" hidden>保管</button>
           </div>
         </div>
       </header>
@@ -1130,7 +1352,7 @@ function shell(): string {
         </aside>
         <main>
           <div id="cloud-notes"></div>
-          <div id="banner" class="banner"></div>
+          <div id="banner" class="banner" hidden></div>
           <p id="count" class="count-line" data-testid="count"></p>
           <div id="board"></div>
         </main>

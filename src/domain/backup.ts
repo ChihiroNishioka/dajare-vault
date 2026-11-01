@@ -33,3 +33,13 @@ export function backupNotice(meta: VaultMeta, now: Date): BackupNotice {
     warn: days >= 5 || changes >= 10,
   };
 }
+
+/** ログインしていないときは、一覧の上のバックアップ案内を出さない。 */
+export function visibleBackupNotice(
+  signedIn: boolean,
+  meta: VaultMeta,
+  now: Date,
+): BackupNotice | null {
+  if (!signedIn) return null;
+  return backupNotice(meta, now);
+}

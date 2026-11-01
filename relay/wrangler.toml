@@ -1,0 +1,6 @@
+name = "dajare-notion-backup"
+main = "src/index.ts"
+compatibility_date = "2026-10-31"
+
+[vars]
+NOTION_PAGE_ID = "40aa4f0d731080219235dfc54ab9683c"

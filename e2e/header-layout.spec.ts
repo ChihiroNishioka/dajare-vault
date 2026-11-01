@@ -76,9 +76,10 @@ function noHorizontalOverlap(items: Box[]): boolean {
 
 async function expectHeaderLayout(page: Page): Promise<void> {
   const actions = await boxes(page, '.mast-actions button');
-  expect(actions.length).toBeGreaterThan(0);
-  expect(sameLine(actions)).toBe(true);
-  expect(noHorizontalOverlap(actions)).toBe(true);
+  if (actions.length > 0) {
+    expect(sameLine(actions)).toBe(true);
+    expect(noHorizontalOverlap(actions)).toBe(true);
+  }
 
   const login = await boxes(page, '.gsi-slot, .account-alt, .mast-actions button');
   const loginRows: Box[][] = [];
@@ -135,7 +136,8 @@ test('signed-out header lines up', async ({ page }) => {
   await expect(page.getByRole('button', { name: '別の方法でログイン' })).toBeVisible();
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
-  await expect(page.getByRole('button', { name: '保管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
   await expectHeaderLayout(page);
   await shot(page, 'signed_out');
 });
@@ -146,7 +148,8 @@ test('signed-in editor header lines up', async ({ page }) => {
   await expect(page.locator('.account-name')).toHaveText('ちひろ');
   await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '保管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expectHeaderLayout(page);
   await shot(page, 'editor');
 });
@@ -157,7 +160,8 @@ test('signed-in read-only header lines up', async ({ page }) => {
   await expect(page.locator('.account-name')).toHaveText('ちひろ');
   await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
-  await expect(page.getByRole('button', { name: '保管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expectHeaderLayout(page);
   await shot(page, 'viewer');
 });

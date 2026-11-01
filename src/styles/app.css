@@ -256,7 +256,8 @@ button.account-alt {
   white-space: nowrap;
   line-height: 1.2;
 }
-.mast-actions .add-button[hidden] {
+.mast-actions .add-button[hidden],
+.mast-actions button.texty[hidden] {
   display: none;
 }
 .mast-actions button.texty,

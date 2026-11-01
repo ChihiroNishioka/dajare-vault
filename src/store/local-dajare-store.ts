@@ -31,6 +31,7 @@ export function adaptLocalStore(inner: Store): DajareStore {
     migrationPending: () => false,
     migrationDone: () => false,
     readError: () => null,
+    hasServerSnapshot: () => true,
     async create(draft, actor, id): Promise<WriteResult> {
       const result = inner.add(draft, { actor, id });
       if (!result.ok) {
