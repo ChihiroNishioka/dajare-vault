@@ -4,17 +4,7 @@ async function fresh(page: Page): Promise<void> {
   await page.goto('/dajare-vault/');
   await page.evaluate(() => localStorage.clear());
   await page.reload();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        void Promise.race([
-          document.fonts.ready,
-          new Promise((done) => {
-            setTimeout(done, 4000);
-          }),
-        ]).then(() => resolve(undefined));
-      }),
-  );
+  await page.evaluate(() => document.fonts.ready);
   await expect(page.locator('dajare-card').first()).toBeVisible();
 }
 

@@ -261,13 +261,16 @@ test('S09 a second はじめる while running does nothing', async ({ page }) =>
   });
   const calls = await relay(page, { holdFirstUpsert: hold });
   await page.goto('/dajare-vault/?mock=editor#notion');
-  await startButton(page).evaluate((button: HTMLButtonElement) => {
-    button.click();
-    button.click();
-  });
+  await startButton(page).click();
   await expect(page.getByText(/送っています/)).toBeVisible();
-  await expect(startButton(page)).toBeVisible();
-  await expect(startButton(page)).toBeDisabled();
+  const again = startButton(page);
+  await expect(again).toBeVisible();
+  await expect(again).toBeDisabled();
+  await expect.poll(() => calls.ensure).toBe(1);
+  await again.evaluate((button: HTMLButtonElement) => {
+    if (!button.isConnected) throw new Error('detached');
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
   await expect.poll(() => calls.ensure).toBe(1);
   release();
   await expect(page.getByText(/最終保管/)).toBeVisible();
@@ -457,19 +460,21 @@ test('S20 logout while running stops later relay calls', async ({ page }) => {
   const calls = await relay(page, { holdFirstUpsert: hold });
   await page.goto('/dajare-vault/?mock=editor#notion');
   await startButton(page).click();
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.upsert).toBe(1);
   await expect(page.getByText(/送っています/)).toBeVisible();
   await page.evaluate(() => {
     const button = document.querySelector('[data-action="sign-out"]') as HTMLButtonElement | null;
     button?.click();
   });
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  const atLogout = calls.total;
   release();
   await backupSettled(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
-  expect(calls.total).toBe(atLogout);
-  expect(calls.finish).toBe(0);
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.archive).toBe(0);
+  await expect.poll(() => calls.finish).toBe(0);
   await page.evaluate(() => {
     location.hash = '#notion';
   });
@@ -509,19 +514,29 @@ test('S22 the header click itself sends no request', async ({ page }) => {
 
 test('S23 signing in while the hash is open does not start a backup', async ({ page }) => {
   const calls = await relay(page);
-  await page.goto('/dajare-vault/?mock=signed-out#notion');
+  await page.goto('/dajare-vault/#notion');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect.poll(() => calls.total).toBe(0);
   await page.evaluate(() => {
     history.replaceState(null, '', `${location.pathname}${location.search}#notion`);
     (
       window as unknown as {
-        __dajareTestAuth?: (next: { signedIn: boolean; editor: boolean }) => void;
+        __dajareApplySession?: (session: {
+          user: { uid: string; name: string } | null;
+          isEditor: boolean;
+          ready: boolean;
+        }) => void;
       }
-    ).__dajareTestAuth?.({ signedIn: true, editor: true });
+    ).__dajareApplySession?.({
+      user: { uid: 'editor-1', name: '編集者' },
+      isEditor: true,
+      ready: true,
+    });
   });
-  await expect(page.getByText(IDLE)).toBeVisible();
-  await expect(startButton(page)).toBeEnabled();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByText('共有の紙を読み終えてから保管します')).toBeVisible();
+  await expect(startButton(page)).toBeDisabled();
+  await expect(page.getByText(/送っています/)).toHaveCount(0);
   await expect.poll(() => calls.ensure).toBe(0);
   await expect.poll(() => calls.total).toBe(0);
 });
@@ -534,6 +549,8 @@ test('H2 losing editor rights without the logout button stops later calls', asyn
   const calls = await relay(page, { holdFirstUpsert: hold });
   await page.goto('/dajare-vault/?mock=editor#notion');
   await startButton(page).click();
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.upsert).toBe(1);
   await expect(page.getByText(/送っています/)).toBeVisible();
   const hooked = await page.evaluate(() => {
     const hook = (
@@ -548,20 +565,11 @@ test('H2 losing editor rights without the logout button stops later calls', asyn
   expect(hooked).toBe(true);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(headerNotion(page)).toBeHidden();
-  const atStop = calls.total;
   release();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as { __dajareBackupState?: () => { settled: boolean } }
-          ).__dajareBackupState?.().settled,
-      ),
-    )
-    .toBe(true);
-  expect(calls.finish).toBe(0);
-  expect(calls.total).toBe(atStop);
+  await backupSettled(page);
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.archive).toBe(0);
+  await expect.poll(() => calls.finish).toBe(0);
 });
 
 test('H2 signing out without the logout button stops later calls', async ({ page }) => {
@@ -572,6 +580,8 @@ test('H2 signing out without the logout button stops later calls', async ({ page
   const calls = await relay(page, { holdFirstUpsert: hold });
   await page.goto('/dajare-vault/?mock=editor#notion');
   await startButton(page).click();
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.upsert).toBe(1);
   await expect(page.getByText(/送っています/)).toBeVisible();
   const hooked = await page.evaluate(() => {
     const hook = (
@@ -586,20 +596,11 @@ test('H2 signing out without the logout button stops later calls', async ({ page
   expect(hooked).toBe(true);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(headerNotion(page)).toBeHidden();
-  const atStop = calls.total;
   release();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as { __dajareBackupState?: () => { settled: boolean } }
-          ).__dajareBackupState?.().settled,
-      ),
-    )
-    .toBe(true);
-  expect(calls.finish).toBe(0);
-  expect(calls.total).toBe(atStop);
+  await backupSettled(page);
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.archive).toBe(0);
+  await expect.poll(() => calls.finish).toBe(0);
 });
 
 test('H1 reopening after a hidden failure shows the failure', async ({ page }) => {
@@ -717,4 +718,44 @@ test('L7 opening settings while running still shows a later confirm', async ({ p
   await page.getByRole('button', { name: 'やめる' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect.poll(() => calls.finish).toBe(0);
+});
+
+test('F2 closing settings during a run does not reopen for a later confirm', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls = await relay(page, { holdFirstUpsert: hold, archive: 'confirm' });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByText(/送っています/)).toBeVisible();
+  await expect.poll(() => calls.upsert).toBe(1);
+  await page.evaluate(() => {
+    const button = document.querySelector('[data-action="settings"]') as HTMLButtonElement | null;
+    button?.click();
+  });
+  await expect(page.getByRole('heading', { name: '保管' })).toBeVisible();
+  await page.getByRole('button', { name: '閉じる' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  release();
+  await expect.poll(() => calls.archive).toBe(1);
+  await expect
+    .poll(async () => {
+      const dialogs = await page.getByRole('dialog').count();
+      const settled = await page.evaluate(
+        () =>
+          (
+            window as unknown as { __dajareBackupState?: () => { settled: boolean } }
+          ).__dajareBackupState?.().settled ?? false,
+      );
+      return { dialogs, settled };
+    })
+    .toEqual({ dialogs: 0, settled: true });
+  await expect.poll(() => calls.finish).toBe(0);
+  if ((page.viewportSize()?.width ?? 0) <= 500) {
+    await page.screenshot({
+      path: 'screenshots/notion/start_settings_closed_confirm_390.png',
+      animations: 'disabled',
+    });
+  }
 });

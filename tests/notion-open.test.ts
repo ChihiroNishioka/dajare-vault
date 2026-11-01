@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runNotionBackup } from '../src/notion/client';
 import { notionPanel } from '../src/ui/panel';
 import { archiveNeedsConfirm, backupBlockReason, type NotionDajare } from '../src/notion/plan';
@@ -57,30 +57,32 @@ describe('notion open panel', () => {
     expect(archiveNeedsConfirm(6, 10)).toBe(true);
   });
 
-  it('S26 a failed backup does not call the relay again by itself', async () => {
-    let calls = 0;
-    let slept = 0;
-    const fetchImpl = (async (_url: string, init?: RequestInit) => {
-      calls += 1;
-      const body = JSON.parse(String(init?.body)) as { op?: string };
-      if (body.op === 'ensure') {
-        return Response.json({ databaseId: 'db-1', lastBackupAt: null });
-      }
-      return new Response(JSON.stringify({ error: 'Notionが混み合っています' }), { status: 502 });
-    }) as typeof fetch;
-    await expect(
-      runNotionBackup({
+  it('S26 a failed backup does not schedule another run when time passes', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fetchImpl = (async (_url: string, init?: RequestInit) => {
+        calls += 1;
+        const body = JSON.parse(String(init?.body)) as { op?: string };
+        if (body.op === 'ensure') {
+          return Response.json({ databaseId: 'db-1', lastBackupAt: null });
+        }
+        return new Response(JSON.stringify({ error: 'Notionが混み合っています' }), { status: 502 });
+      }) as typeof fetch;
+      const pending = runNotionBackup({
         relayUrl: 'https://notion-backup.test/notion-backup',
         token: ['browser', 'placeholder'].join('-'),
         entries: [entry('id-1')],
         fetchImpl,
-        sleep: async () => {
-          slept += 1;
-        },
-      }),
-    ).rejects.toThrow(/混み合っています/);
-    expect(calls).toBe(2);
-    expect(slept).toBe(0);
+      });
+      await expect(pending).rejects.toThrow(/混み合っています/);
+      const afterFailure = calls;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(calls).toBe(afterFailure);
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('M4 a retry wait does not send again after stop', async () => {

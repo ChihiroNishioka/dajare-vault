@@ -13,15 +13,7 @@ function shot(page: Page, name: string): string {
 }
 
 async function settle(page: Page): Promise<void> {
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        void Promise.race([
-          document.fonts.ready,
-          new Promise((done) => setTimeout(done, 4000)),
-        ]).then(() => resolve(undefined));
-      }),
-  );
+  await page.evaluate(() => document.fonts.ready);
 }
 
 test('signed-out visitors see neither backup and neither hash opens a panel', async ({ page }) => {

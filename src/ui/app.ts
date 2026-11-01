@@ -373,7 +373,7 @@ export function mount(
   };
 
   const closePanel = (): void => {
-    if (ui.panel.kind === 'notion' && notionBusy) notionDismissed = true;
+    if (notionBusy) notionDismissed = true;
     confirmArchive?.(false);
     confirmArchive = null;
     ui.panel = { kind: 'closed' };
@@ -748,6 +748,7 @@ export function mount(
       return;
     }
     notionBusy = true;
+    notionDismissed = false;
     notionSettled = false;
     const generation = (notionGeneration += 1);
     syncAccount();
@@ -1286,12 +1287,7 @@ export function mount(
         syncAccount();
         cloudSignOut = () => cloud.signOut();
         cloud.subscribe((session) => {
-          gate.user = session.user;
-          gate.isEditor = session.isEditor;
-          syncAccount();
-          renderResults();
-          renderCloudNotes();
-          if (session.ready) applyBackupHash();
+          applyCloudSession(session);
         });
         cloud.store.subscribe(() => {
           renderResults();
@@ -1329,6 +1325,19 @@ export function mount(
     if (hash === '#settings') openSettings();
     if (hash === '#notion') openNotionPanel();
   };
+  const applyCloudSession = (session: {
+    user: Actor | null;
+    isEditor: boolean;
+    ready: boolean;
+  }): void => {
+    gate.mode = 'cloud';
+    gate.user = session.user;
+    gate.isEditor = session.isEditor;
+    syncAccount();
+    renderResults();
+    renderCloudNotes();
+    if (session.ready) applyBackupHash();
+  };
   window.addEventListener('hashchange', applyBackupHash);
   if (!(isFirebaseConfigured(firebaseConfig) && headerChrome === null)) applyBackupHash();
   if (!(import.meta.env.PROD && import.meta.env.VITE_FORCE_LOCAL !== '1')) {
@@ -1338,6 +1347,13 @@ export function mount(
         syncChrome();
         renderResults();
         applyBackupHash();
+      },
+      __dajareApplySession(session: {
+        user: { uid: string; name: string } | null;
+        isEditor: boolean;
+        ready: boolean;
+      }) {
+        applyCloudSession(session);
       },
       __dajareBackupState(): { settled: boolean } {
         return { settled: notionSettled };
