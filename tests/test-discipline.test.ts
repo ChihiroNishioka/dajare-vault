@@ -78,8 +78,32 @@ describe('test discipline', () => {
     ).toContain('source-walk');
     expect(
       disciplineViolations(
-        "import { readdirSync, readFileSync } from 'node:fs';\nconst body = readFileSync(path, 'utf8'); // discipline-allow\n",
+        "import { readdirSync, readFileSync } from 'node:fs';\nconst body = readFileSync(path, 'utf8'); // discipline-allow source-walk\n",
       ),
     ).toEqual([]);
+    expect(
+      disciplineViolations(
+        "for (const name of readdirSync('src')) readFileSync(name, 'utf8'); // discipline-allow\n",
+      ),
+    ).toContain('source-walk');
+    expect(
+      disciplineViolations('setTimeout(() => {}, 1);\n// discipline-allow polling\n'),
+    ).toContain('setTimeout');
+    expect(
+      disciplineViolations("const note = 'discipline-allow polling';\nsetTimeout(() => {}, 1);\n"),
+    ).toContain('setTimeout');
+    expect(
+      disciplineViolations(
+        "import { setTimeout as sleep } from 'node:timers/promises'; // discipline-allow import only\nawait sleep(800);\n",
+      ),
+    ).toContain('timers-promises');
+    expect(
+      disciplineViolations(
+        "import { readdirSync, readFileSync } from 'node:fs'; // discipline-allow source-walk\nfor (const name of readdirSync('src/ui')) readFileSync(name, 'utf8');\n",
+      ),
+    ).toContain('source-walk');
+    expect(disciplineViolations('setTimeout(() => {}, 1); // discipline-allow polling\n')).toEqual(
+      [],
+    );
   });
 });

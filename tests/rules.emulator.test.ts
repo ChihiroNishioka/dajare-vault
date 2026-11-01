@@ -81,7 +81,7 @@ async function waitFor(pred: () => boolean): Promise<void> {
   const start = Date.now();
   while (!pred()) {
     if (Date.now() - start > 5000) throw new Error('timed out waiting for the store');
-    await new Promise((resolve) => setTimeout(resolve, 25)); // discipline-allow deadline
+    await new Promise((resolve) => setTimeout(resolve, 25)); // discipline-allow polling
   }
 }
 

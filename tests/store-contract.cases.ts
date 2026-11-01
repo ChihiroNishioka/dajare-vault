@@ -27,15 +27,13 @@ export function sampleDraft(text = '契約の試し'): DajareDraft {
 async function until(store: DajareStore, pred: (items: Dajare[]) => boolean): Promise<void> {
   if (pred(store.getItems())) return;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      // discipline-allow deadline
-      () => {
-        stop();
-        reject(new Error('store did not update'));
-      },
-      5000,
-    );
-    const stop = store.subscribe((items) => {
+    let stop = (): void => undefined;
+    const timer = setTimeout(giveUp, 5000); // discipline-allow deadline
+    function giveUp(): void {
+      stop();
+      reject(new Error('store did not update'));
+    }
+    stop = store.subscribe((items) => {
       if (!pred(items)) return;
       clearTimeout(timer);
       stop();

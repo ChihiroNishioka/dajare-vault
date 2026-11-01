@@ -627,6 +627,10 @@ export function mount(
     if (block === 'empty') return '紙が無いので保管しません';
     return '共有の紙を読めないので保管しません';
   };
+  const notionIdleCopy = (): string => {
+    const block = notionBlock();
+    return block ? blockText(block) : '紙を Notion に控えます。消えた紙の行はしまって残します。';
+  };
 
   const showNotion = (
     mode: 'idle' | 'running' | 'confirm' | 'done',
@@ -683,12 +687,7 @@ export function mount(
       showNotion('done', unseen.text, { force: true, failure: unseen.failure });
       return;
     }
-    const block = notionBlock();
-    showNotion(
-      'idle',
-      block ? blockText(block) : '紙を Notion に控えます。消えた紙の行はしまって残します。',
-      { force: true },
-    );
+    showNotion('idle', notionIdleCopy(), { force: true });
   };
 
   const openSettings = (): void => {
@@ -1226,7 +1225,17 @@ export function mount(
 
   const refreshNotionIfIdle = (): void => {
     if (ui.panel.kind !== 'notion' || notionBusy || notionMode !== 'idle') return;
-    openNotionPanel();
+    const text = notionIdleCopy();
+    const status = panel.querySelector<HTMLElement>('[data-notion-status]');
+    const start = panel.querySelector<HTMLButtonElement>('[data-action="notion-backup"]');
+    if (!status || !start) {
+      openNotionPanel();
+      return;
+    }
+    if (status.textContent !== text) status.textContent = text;
+    const disabled = notionBlock() !== null;
+    if (start.disabled !== disabled) start.disabled = disabled;
+    notionText = text;
   };
   const onListedItems = (): void => {
     renderResults();
@@ -1373,6 +1382,9 @@ export function mount(
               getItems: () => [],
             };
         onListedItems();
+      },
+      __dajareNoteBusy() {
+        notionBusy = true;
       },
       __dajareBackupState(): { settled: boolean } {
         return { settled: notionSettled };
