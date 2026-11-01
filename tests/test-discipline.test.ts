@@ -105,5 +105,25 @@ describe('test discipline', () => {
     expect(disciplineViolations('setTimeout(() => {}, 1); // discipline-allow polling\n')).toEqual(
       [],
     );
+    expect(
+      disciplineViolations(
+        "import {\n  setTimeout as sleep, // discipline-allow polling\n} from 'node:timers/promises';\nawait sleep(800);\n",
+      ),
+    ).toContain('timers-promises');
+    expect(
+      disciplineViolations(
+        "import {\n  setTimeout as sleep,\n} from 'node:timers/promises'; // discipline-allow polling\nawait sleep(800);\n",
+      ),
+    ).toContain('timers-promises');
+    expect(
+      disciplineViolations(
+        "setTimeout(() => {}, 1); const hidden = ' // discipline-allow polling';\n",
+      ),
+    ).toContain('setTimeout');
+    expect(
+      disciplineViolations(
+        'const note = `\n// discipline-allow polling`; setTimeout(() => {}, 1);\n',
+      ),
+    ).toContain('setTimeout');
   });
 });
