@@ -82,7 +82,7 @@ Notion はおおよそ毎秒3回までです。リレーは 340ms 以上間隔�
 
    B. Cloudflare のダッシュボードを開く。Workers & Pages、Overview で `dajare-notion-backup`、Settings。Variables and Secrets の Add。Type は Secret、Variable name は `NOTION_TOKEN`、Value に統合のトークンを貼る。Deploy を押す。
 
-6. 出た Worker の URL を、サイトをビルドするときの環境変数 `VITE_NOTION_RELAY_URL` に入れる。例: `https://dajare-notion-backup.<アカウント名>.workers.dev` 。リレーはパスを見ずに受けます。
+6. 出た Worker の URL は `https://dajare-notion-backup.chihiro-nishioka.workers.dev` です。サイトをビルドするときの環境変数 `VITE_NOTION_RELAY_URL` に入れます。リレーはパスを見ずに受けます。
 7. プレビューをその変数付きで作り直す。変数が空のあいだ、ボタンは「Notion保管のリレーが未設定です」と出して止まります。秘密がまだ無いあいだは「リレーの秘密が未設定です」と出て止まります。Notion へは書きません。
 
 Worker の入口は `relay/src/index.ts` です。
