@@ -806,3 +806,29 @@ describe('backup guards', () => {
     expect(patches).toEqual(['c'.repeat(32)]);
   });
 });
+
+describe('relay without a Notion token', () => {
+  it('tells the site the secret is missing and allows that origin to read it', async () => {
+    const worker = (await import('../relay/src/index')).default;
+    const origin = 'https://chihironishioka.github.io';
+    const response = await worker.fetch(
+      new Request('https://relay.example/notion-backup', {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: '{}',
+      }),
+      {},
+    );
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'リレーの秘密が未設定です' });
+    expect(response.headers.get('access-control-allow-origin')).toBe(origin);
+    const foreign = await worker.fetch(
+      new Request('https://relay.example/notion-backup', {
+        method: 'POST',
+        headers: { origin: 'https://example.com' },
+      }),
+      {},
+    );
+    expect(foreign.headers.get('access-control-allow-origin')).toBeNull();
+  });
+});

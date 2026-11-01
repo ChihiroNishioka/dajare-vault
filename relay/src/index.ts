@@ -1,4 +1,5 @@
 import { verifyFirebaseIdToken, loadSecureTokenKey } from '../../src/notion/claims';
+import { backupCors } from '../../src/notion/cors';
 import { confirmEditor } from '../../src/notion/editors';
 import { handleNotionBackup } from '../../src/notion/handler';
 import { createNotionClient } from '../../src/notion/notion-api';
@@ -13,9 +14,16 @@ const PAGE_ID = '40aa4f0d731080219235dfc54ab9683c';
 export default {
   async fetch(request: Request, env: RelayEnv): Promise<Response> {
     if (!env.NOTION_TOKEN) {
+      const cors = backupCors(request.headers.get('origin'));
+      if (request.method === 'OPTIONS') {
+        if (!cors) return new Response(null, { status: 403 });
+        return new Response(null, { status: 204, headers: cors });
+      }
+      const headers = new Headers(cors ?? undefined);
+      headers.set('content-type', 'application/json; charset=utf-8');
       return new Response(JSON.stringify({ error: 'リレーの秘密が未設定です' }), {
         status: 500,
-        headers: { 'content-type': 'application/json; charset=utf-8' },
+        headers,
       });
     }
     const pageId = env.NOTION_PAGE_ID || PAGE_ID;

@@ -74,21 +74,15 @@ Notion はおおよそ毎秒3回までです。リレーは 340ms 以上間隔�
 1. [Notion の統合](https://www.notion.so/profile/integrations) を作る。機能は「コンテンツを読み取る」「コンテンツを挿入する」「コンテンツを更新する」。
 2. 控えを置くページ（`https://app.notion.com/p/40aa4f0d731080219235dfc54ab9683c`）を、その統合に共有する。
 3. Cloudflare のアカウントを自分で作る（こちらでは作りません）。
-4. 秘密 `NOTION_TOKEN` を Worker に入れる。値は統合のトークンです。
+4. Worker の名前は `dajare-notion-backup` です。ページ id は秘密ではありません。`relay/wrangler.toml` の `NOTION_PAGE_ID` に入っています。デプロイは GitHub Actions の「notion-relay」が行います。リポジトリの Actions 秘密 `CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` を使います。
 
-   ```bash
-   cd relay
-   npx --yes wrangler@3 secret put NOTION_TOKEN
-   ```
+5. 統合のトークンを、秘密 `NOTION_TOKEN` として Worker に入れます。値はこのチャットやリポジトリのファイルには書きません。iPhone のブラウザだけで、次のどちらかです。
 
-   ページ id は秘密ではありません。`relay/wrangler.toml` の `NOTION_PAGE_ID` に入っています。
+   A. GitHub を開く。対象のリポジトリで Settings、Secrets and variables、Actions、New repository secret。Name は `NOTION_TOKEN`、Secret に統合のトークンを貼る。Add secret を押す。そのあと Actions の notion-relay の実行を開き、Re-run jobs を押す。
 
-5. デプロイする。手元なら `sh scripts/deploy-notion-relay.sh`。GitHub なら Actions の「notion-relay」を手動で走らせる。そのときリポジトリの Actions 秘密が要ります。
-
-   - `CLOUDFLARE_API_TOKEN`
-   - `CLOUDFLARE_ACCOUNT_ID`
+   B. Cloudflare のダッシュボードを開く。Workers & Pages、Overview で `dajare-notion-backup`、Settings。Variables and Secrets の Add。Type は Secret、Variable name は `NOTION_TOKEN`、Value に統合のトークンを貼る。Deploy を押す。
 
 6. 出た Worker の URL を、サイトをビルドするときの環境変数 `VITE_NOTION_RELAY_URL` に入れる。例: `https://dajare-notion-backup.<アカウント名>.workers.dev` 。リレーはパスを見ずに受けます。
-7. プレビューをその変数付きで作り直す。変数が空のあいだ、ボタンは「Notion保管のリレーが未設定です」と出して止まります。Notion へは書きません。
+7. プレビューをその変数付きで作り直す。変数が空のあいだ、ボタンは「Notion保管のリレーが未設定です」と出して止まります。秘密がまだ無いあいだは「リレーの秘密が未設定です」と出て止まります。Notion へは書きません。
 
 Worker の入口は `relay/src/index.ts` です。
