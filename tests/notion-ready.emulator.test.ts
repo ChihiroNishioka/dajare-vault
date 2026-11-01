@@ -1,22 +1,7 @@
-import { vi } from 'vitest';
-
-const { snapshotCalls } = vi.hoisted(() => ({ snapshotCalls: [] as unknown[][] }));
-
-vi.mock('firebase/firestore', async () => {
-  const actual = await vi.importActual<typeof import('firebase/firestore')>('firebase/firestore');
-  return {
-    ...actual,
-    onSnapshot: (...args: unknown[]) => {
-      snapshotCalls.push(args);
-      return (actual.onSnapshot as (...inner: unknown[]) => () => void)(...args);
-    },
-  };
-});
-
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { doc, setDoc, type Firestore } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, type Firestore } from 'firebase/firestore';
 import { createFirestoreStore } from '../src/cloud/firestore-store';
 import { seedId } from '../src/domain/ids';
 
@@ -25,11 +10,27 @@ let env: RulesTestEnvironment;
 
 const emulatorUp = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 
-async function until(pred: () => boolean): Promise<void> {
+async function until(pred: () => boolean, detail: () => string): Promise<void> {
   const start = Date.now();
   while (!pred()) {
-    if (Date.now() - start > 5000) throw new Error('共有の紙がサーバーで確認されません');
+    if (Date.now() - start > 4000) throw new Error(detail());
     await new Promise((resolve) => setTimeout(resolve, 25)); // discipline-allow polling
+  }
+}
+
+/** 一度サーバーまで読んで購読を切る。次の購読は、メモリ上のキャッシュから先に届く。 */
+async function readOnceFromServer(db: Firestore): Promise<void> {
+  let fromServer = false;
+  const unsub = onSnapshot(collection(db, 'dajare'), (snap) => {
+    if (!snap.metadata.fromCache) fromServer = true;
+  });
+  try {
+    await until(
+      () => fromServer,
+      () => '先にサーバーの一覧を読めませんでした',
+    );
+  } finally {
+    unsub();
   }
 }
 
@@ -50,7 +51,7 @@ describe.skipIf(!emulatorUp)('notion backup waits for the server snapshot', () =
     await env.cleanup();
   });
 
-  it('サーバー確認が届いてから保管を始められる', async () => {
+  it('キャッシュの次のサーバー確認が届いてから保管を始められる', async () => {
     const id = seedId(310);
     await env.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), `dajare/${id}`), {
@@ -71,25 +72,19 @@ describe.skipIf(!emulatorUp)('notion backup waits for the server snapshot', () =
         updatedBy: { uid: 'editor-uid', name: '編集者' },
       });
     });
-    snapshotCalls.length = 0;
     const db = env
       .authenticatedContext('editor-uid', {
         email: 'editor@example.com',
         email_verified: true,
       })
       .firestore() as unknown as Firestore;
+    await readOnceFromServer(db);
     const store = createFirestoreStore(db, () => ({ uid: 'editor-uid', name: '編集者' }));
-    await until(() => store.getItems().some((item) => item.id === id) && store.hasServerSnapshot());
-    const sawServer = snapshotCalls.some((args) =>
-      args.some(
-        (arg) =>
-          arg !== null &&
-          typeof arg === 'object' &&
-          'includeMetadataChanges' in arg &&
-          (arg as { includeMetadataChanges?: boolean }).includeMetadataChanges === true,
-      ),
+    await until(
+      () => store.getItems().some((item) => item.id === id) && store.hasServerSnapshot(),
+      () =>
+        `サーバー確認が届きません（hasServerSnapshot=${store.hasServerSnapshot()} 一覧=${store.getItems().some((item) => item.id === id)}）`,
     );
-    expect(sawServer).toBe(true);
     expect(store.hasServerSnapshot()).toBe(true);
     expect(store.getItems().some((item) => item.id === id)).toBe(true);
   });
