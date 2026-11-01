@@ -627,6 +627,10 @@ export function mount(
     if (block === 'empty') return '紙が無いので保管しません';
     return '共有の紙を読めないので保管しません';
   };
+  const notionIdleCopy = (): string => {
+    const block = notionBlock();
+    return block ? blockText(block) : '紙を Notion に控えます。消えた紙の行はしまって残します。';
+  };
 
   const showNotion = (
     mode: 'idle' | 'running' | 'confirm' | 'done',
@@ -683,12 +687,7 @@ export function mount(
       showNotion('done', unseen.text, { force: true, failure: unseen.failure });
       return;
     }
-    const block = notionBlock();
-    showNotion(
-      'idle',
-      block ? blockText(block) : '紙を Notion に控えます。消えた紙の行はしまって残します。',
-      { force: true },
-    );
+    showNotion('idle', notionIdleCopy(), { force: true });
   };
 
   const openSettings = (): void => {
@@ -1224,8 +1223,29 @@ export function mount(
     openPanel();
   };
 
+  const refreshNotionIfIdle = (): void => {
+    if (ui.panel.kind !== 'notion' || notionBusy || notionMode !== 'idle') return;
+    const text = notionIdleCopy();
+    const status = panel.querySelector<HTMLElement>('[data-notion-status]');
+    const start = panel.querySelector<HTMLButtonElement>('[data-action="notion-backup"]');
+    if (!status || !start) {
+      openNotionPanel();
+      return;
+    }
+    if (status.textContent !== text) status.textContent = text;
+    const disabled = notionBlock() !== null;
+    if (start.disabled !== disabled) start.disabled = disabled;
+    notionText = text;
+  };
+  const onListedItems = (): void => {
+    renderResults();
+    renderChoices();
+    renderCloudNotes();
+    refreshNotionIfIdle();
+  };
   store.subscribe(() => {
     renderResults();
+    refreshNotionIfIdle();
   });
   const renderCloudNotes = (): void => {
     const slot = root.querySelector('#cloud-notes');
@@ -1290,9 +1310,7 @@ export function mount(
           applyCloudSession(session);
         });
         cloud.store.subscribe(() => {
-          renderResults();
-          renderChoices();
-          renderCloudNotes();
+          onListedItems();
         });
       })
       .catch(() => {
@@ -1354,6 +1372,19 @@ export function mount(
         ready: boolean;
       }) {
         applyCloudSession(session);
+      },
+      __dajareCloudSnapshot(ready: boolean) {
+        cloudStore = ready
+          ? localApi
+          : {
+              ...localApi,
+              hasServerSnapshot: () => false,
+              getItems: () => [],
+            };
+        onListedItems();
+      },
+      __dajareNoteBusy() {
+        notionBusy = true;
       },
       __dajareBackupState(): { settled: boolean } {
         return { settled: notionSettled };

@@ -518,26 +518,201 @@ test('S23 signing in while the hash is open does not start a backup', async ({ p
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect.poll(() => calls.total).toBe(0);
   await page.evaluate(() => {
+    const hooks = window as unknown as {
+      __dajareCloudSnapshot?: (ready: boolean) => void;
+      __dajareApplySession?: (session: {
+        user: { uid: string; name: string } | null;
+        isEditor: boolean;
+        ready: boolean;
+      }) => void;
+    };
+    hooks.__dajareCloudSnapshot?.(true);
     history.replaceState(null, '', `${location.pathname}${location.search}#notion`);
-    (
-      window as unknown as {
-        __dajareApplySession?: (session: {
-          user: { uid: string; name: string } | null;
-          isEditor: boolean;
-          ready: boolean;
-        }) => void;
-      }
-    ).__dajareApplySession?.({
+    hooks.__dajareApplySession?.({
       user: { uid: 'editor-1', name: '編集者' },
       isEditor: true,
       ready: true,
     });
   });
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByText('共有の紙を読み終えてから保管します')).toBeVisible();
-  await expect(startButton(page)).toBeDisabled();
+  await expect(page.getByText(IDLE)).toBeVisible();
+  await expect(startButton(page)).toBeEnabled();
+  await backupSettled(page);
   await expect(page.getByText(/送っています/)).toHaveCount(0);
   await expect.poll(() => calls.ensure).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
+});
+
+test('S26 a failed backup does not start again when page time passes', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-01T12:00:00+09:00') });
+  const calls = { total: 0, ensure: 0, upsert: 0, archive: 0, finish: 0 };
+  await page.route('https://notion-backup.test/**', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}') as {
+      op?: string;
+      entries?: unknown[];
+    };
+    calls.total += 1;
+    if (body.op === 'ensure') calls.ensure += 1;
+    if (body.op === 'upsert') calls.upsert += 1;
+    if (body.op === 'archive') calls.archive += 1;
+    if (body.op === 'finish') calls.finish += 1;
+    if (body.op === 'ensure') {
+      await route.fulfill({ json: { databaseId: 'db-1', lastBackupAt: null } });
+      return;
+    }
+    if (body.op === 'upsert') {
+      await route.fulfill({
+        json: { created: 0, updated: body.entries?.length ?? 0, unchanged: 0 },
+      });
+      return;
+    }
+    if (body.op === 'archive') {
+      await route.fulfill({ status: 502, json: { error: 'Notionが混み合っています' } });
+      return;
+    }
+    await route.fulfill({ json: { lastBackupAt: '2026-11-01T08:00:00.000Z' } });
+  });
+  await openEditor(page);
+  await headerNotion(page).click();
+  await startButton(page).click();
+  await expect(page.getByText(/途中で止まりました/)).toBeVisible();
+  await expect(startButton(page)).toBeEnabled();
+  await backupSettled(page);
+  const ensures = calls.ensure;
+  await page.clock.fastForward(60_000);
+  await expect(startButton(page)).toBeEnabled();
+  await expect(page.getByText(/途中で止まりました/)).toBeVisible();
+  await expect.poll(() => calls.ensure).toBe(ensures);
+  await expect.poll(() => calls.finish).toBe(0);
+});
+
+test('F9 the start button enables when the shared list finishes loading', async ({ page }) => {
+  const calls = await relay(page);
+  await page.goto('/dajare-vault/');
+  await page.evaluate(() => {
+    const hooks = window as unknown as {
+      __dajareCloudSnapshot?: (ready: boolean) => void;
+      __dajareApplySession?: (session: {
+        user: { uid: string; name: string } | null;
+        isEditor: boolean;
+        ready: boolean;
+      }) => void;
+    };
+    hooks.__dajareCloudSnapshot?.(false);
+    history.replaceState(null, '', `${location.pathname}${location.search}#notion`);
+    hooks.__dajareApplySession?.({
+      user: { uid: 'editor-1', name: '編集者' },
+      isEditor: true,
+      ready: true,
+    });
+  });
+  await expect(page.getByText('共有の紙を読み終えてから保管します')).toBeVisible();
+  await expect(startButton(page)).toBeDisabled();
+  await page.evaluate(() => {
+    (
+      window as unknown as { __dajareCloudSnapshot?: (ready: boolean) => void }
+    ).__dajareCloudSnapshot?.(true);
+  });
+  await expect(page.getByText(IDLE)).toBeVisible();
+  await expect(startButton(page)).toBeEnabled();
+  await expect.poll(() => calls.total).toBe(0);
+});
+
+async function applyReadySession(page: Page): Promise<void> {
+  await page.goto('/dajare-vault/');
+  await page.evaluate(() => {
+    const hooks = window as unknown as {
+      __dajareCloudSnapshot?: (ready: boolean) => void;
+      __dajareApplySession?: (session: {
+        user: { uid: string; name: string } | null;
+        isEditor: boolean;
+        ready: boolean;
+      }) => void;
+    };
+    hooks.__dajareCloudSnapshot?.(true);
+    history.replaceState(null, '', `${location.pathname}${location.search}#notion`);
+    hooks.__dajareApplySession?.({
+      user: { uid: 'editor-1', name: '編集者' },
+      isEditor: true,
+      ready: true,
+    });
+  });
+  await expect(page.getByText(IDLE)).toBeVisible();
+}
+
+async function pokeList(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (
+      window as unknown as { __dajareCloudSnapshot?: (ready: boolean) => void }
+    ).__dajareCloudSnapshot?.(true);
+  });
+}
+
+test('F14 a list update keeps focus on 閉じる', async ({ page }) => {
+  await applyReadySession(page);
+  const close = page.getByRole('button', { name: '閉じる' });
+  await close.focus();
+  await expect(close).toBeFocused();
+  await pokeList(page);
+  await expect(close).toBeFocused();
+  await expect(startButton(page)).not.toBeFocused();
+  if ((page.viewportSize()?.width ?? 0) <= 500) {
+    await page.screenshot({
+      path: 'screenshots/notion/focus_close_390.png',
+      animations: 'disabled',
+    });
+  }
+});
+
+test('refresh keeps a finished result when the list updates', async ({ page }) => {
+  const calls = await relay(page);
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByText(/最終保管/)).toBeVisible();
+  await pokeList(page);
+  await expect(page.getByText(/最終保管/)).toBeVisible();
+  await expect(page.getByText(IDLE)).toHaveCount(0);
+  await expect.poll(() => calls.ensure).toBe(1);
+});
+
+test('refresh while a run is marked busy does not enable はじめる', async ({ page }) => {
+  await page.goto('/dajare-vault/');
+  await page.evaluate(() => {
+    const hooks = window as unknown as {
+      __dajareCloudSnapshot?: (ready: boolean) => void;
+      __dajareApplySession?: (session: {
+        user: { uid: string; name: string } | null;
+        isEditor: boolean;
+        ready: boolean;
+      }) => void;
+      __dajareNoteBusy?: () => void;
+    };
+    hooks.__dajareCloudSnapshot?.(false);
+    history.replaceState(null, '', `${location.pathname}${location.search}#notion`);
+    hooks.__dajareApplySession?.({
+      user: { uid: 'editor-1', name: '編集者' },
+      isEditor: true,
+      ready: true,
+    });
+    hooks.__dajareNoteBusy?.();
+  });
+  await expect(page.getByText('共有の紙を読み終えてから保管します')).toBeVisible();
+  await expect(startButton(page)).toBeDisabled();
+  await page.evaluate(() => {
+    (
+      window as unknown as { __dajareCloudSnapshot?: (ready: boolean) => void }
+    ).__dajareCloudSnapshot?.(true);
+  });
+  await expect(page.getByText('共有の紙を読み終えてから保管します')).toBeVisible();
+  await expect(startButton(page)).toBeDisabled();
+});
+
+test('refresh while the panel is closed does not reopen it', async ({ page }) => {
+  const calls = await relay(page);
+  await applyReadySession(page);
+  await page.getByRole('button', { name: '閉じる' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await pokeList(page);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect.poll(() => calls.total).toBe(0);
 });
 

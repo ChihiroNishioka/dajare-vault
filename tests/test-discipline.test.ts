@@ -11,13 +11,7 @@ function files(dir: string): string[] {
   });
 }
 
-const skip = new Set([
-  'tests/test-discipline.test.ts',
-  'tests/discipline.ts',
-  // 時刻の境界と、購読の期限。待ちのための sleep ではない。
-  'tests/rules.emulator.test.ts',
-  'tests/store-contract.cases.ts',
-]);
+const skip = new Set(['tests/test-discipline.test.ts', 'tests/discipline.ts']);
 
 describe('test discipline', () => {
   it('tests and e2e do not sleep or read source text', () => {
@@ -67,5 +61,49 @@ describe('test discipline', () => {
         "readFileSync(path, 'utf8');\nif (path.endsWith('src/firebase-config.ts')) continue;",
       ),
     ).toEqual([]);
+    expect(
+      disciplineViolations(
+        "import { setTimeout as sleep } from 'node:timers/promises';\nawait sleep(800);",
+      ),
+    ).toContain('timers-promises');
+    expect(
+      disciplineViolations(
+        "import { setTimeout as delay } from 'timers/promises';\nawait delay(1);",
+      ),
+    ).toContain('timers-promises');
+    expect(
+      disciplineViolations(
+        "import { readdirSync, readFileSync } from 'node:fs';\nfor (const name of readdirSync('src/ui')) readFileSync(name, 'utf8');",
+      ),
+    ).toContain('source-walk');
+    expect(
+      disciplineViolations(
+        "import { readdirSync, readFileSync } from 'node:fs';\nconst body = readFileSync(path, 'utf8'); // discipline-allow source-walk\n",
+      ),
+    ).toEqual([]);
+    expect(
+      disciplineViolations(
+        "for (const name of readdirSync('src')) readFileSync(name, 'utf8'); // discipline-allow\n",
+      ),
+    ).toContain('source-walk');
+    expect(
+      disciplineViolations('setTimeout(() => {}, 1);\n// discipline-allow polling\n'),
+    ).toContain('setTimeout');
+    expect(
+      disciplineViolations("const note = 'discipline-allow polling';\nsetTimeout(() => {}, 1);\n"),
+    ).toContain('setTimeout');
+    expect(
+      disciplineViolations(
+        "import { setTimeout as sleep } from 'node:timers/promises'; // discipline-allow import only\nawait sleep(800);\n",
+      ),
+    ).toContain('timers-promises');
+    expect(
+      disciplineViolations(
+        "import { readdirSync, readFileSync } from 'node:fs'; // discipline-allow source-walk\nfor (const name of readdirSync('src/ui')) readFileSync(name, 'utf8');\n",
+      ),
+    ).toContain('source-walk');
+    expect(disciplineViolations('setTimeout(() => {}, 1); // discipline-allow polling\n')).toEqual(
+      [],
+    );
   });
 });

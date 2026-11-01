@@ -27,7 +27,7 @@ describe('no secrets in the tree', () => {
   it('has no email, phone, or credential material', () => {
     const hits: string[] = [];
     for (const path of textFiles) {
-      const body = readFileSync(path, 'utf8');
+      const body = readFileSync(path, 'utf8'); // discipline-allow source-walk
       const emails = body.match(new RegExp(email, 'g')) ?? [];
       if (emails.some((address) => !address.toLowerCase().endsWith('@example.com'))) {
         hits.push(`${relative('.', path)} matched an email`);
