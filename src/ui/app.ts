@@ -1224,8 +1224,19 @@ export function mount(
     openPanel();
   };
 
+  const refreshNotionIfIdle = (): void => {
+    if (ui.panel.kind !== 'notion' || notionBusy || notionMode !== 'idle') return;
+    openNotionPanel();
+  };
+  const onListedItems = (): void => {
+    renderResults();
+    renderChoices();
+    renderCloudNotes();
+    refreshNotionIfIdle();
+  };
   store.subscribe(() => {
     renderResults();
+    refreshNotionIfIdle();
   });
   const renderCloudNotes = (): void => {
     const slot = root.querySelector('#cloud-notes');
@@ -1290,9 +1301,7 @@ export function mount(
           applyCloudSession(session);
         });
         cloud.store.subscribe(() => {
-          renderResults();
-          renderChoices();
-          renderCloudNotes();
+          onListedItems();
         });
       })
       .catch(() => {
@@ -1354,6 +1363,16 @@ export function mount(
         ready: boolean;
       }) {
         applyCloudSession(session);
+      },
+      __dajareCloudSnapshot(ready: boolean) {
+        cloudStore = ready
+          ? localApi
+          : {
+              ...localApi,
+              hasServerSnapshot: () => false,
+              getItems: () => [],
+            };
+        onListedItems();
       },
       __dajareBackupState(): { settled: boolean } {
         return { settled: notionSettled };

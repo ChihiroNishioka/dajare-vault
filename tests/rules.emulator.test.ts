@@ -81,7 +81,7 @@ async function waitFor(pred: () => boolean): Promise<void> {
   const start = Date.now();
   while (!pred()) {
     if (Date.now() - start > 5000) throw new Error('timed out waiting for the store');
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 25)); // discipline-allow deadline
   }
 }
 
@@ -675,7 +675,7 @@ describe.skipIf(!emulatorUp)('seed migration', () => {
     const item = store.getItems().find((row) => row.text === '元の本文');
     if (!item) throw new Error('missing item');
     const expected = item.updatedAt;
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await new Promise((resolve) => setTimeout(resolve, 1100)); // discipline-allow clock boundary
     const edited = await store.update(item.id, sampleDraft('誰かが直した'), actor);
     expect(edited.ok).toBe(true);
     await waitFor(() =>
