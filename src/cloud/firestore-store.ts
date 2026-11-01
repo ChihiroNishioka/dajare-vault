@@ -190,6 +190,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
 
   onSnapshot(
     collection(db, COLLECTION),
+    { includeMetadataChanges: true },
     (snap) => {
       items = snap.docs.map((row) => dajareFromDoc(row.id, row.data() as Record<string, unknown>));
       if (!snap.metadata.fromCache) serverReady = true;
@@ -204,6 +205,7 @@ export function createFirestoreStore(db: Firestore, actor: () => Actor | null): 
 
   onSnapshot(
     doc(db, ...MIGRATION_PATH),
+    { includeMetadataChanges: true },
     (snap) => {
       migrationState = snap.exists() ? 'done' : 'pending';
       markerError = null;
