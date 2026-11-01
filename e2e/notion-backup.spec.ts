@@ -150,10 +150,8 @@ test('backup reports progress and success through the mocked relay', async ({ pa
   });
   await page.goto('/dajare-vault/?mock=editor');
   await expect(page.locator('dajare-card').first()).toBeVisible();
-  await page.locator('[data-action="notion-backup"]').evaluate((button: HTMLButtonElement) => {
-    button.click();
-    button.click();
-  });
+  await page.locator('header.masthead button').filter({ hasText: 'Notionに保管' }).click();
+  await page.getByRole('button', { name: 'はじめる' }).click();
   await expect(page.getByText(/送っています/)).toBeVisible();
   await page.screenshot({ path: shot(page, 'progress'), animations: 'disabled' });
   release();
@@ -173,7 +171,8 @@ test('backup shows a failure and can be closed', async ({ page }) => {
     await route.fulfill({ status: 502, json: { error: 'Notionが混み合っています' } });
   });
   await page.goto('/dajare-vault/?mock=editor');
-  await page.getByRole('button', { name: 'Notionに保管' }).click();
+  await page.locator('header.masthead button').filter({ hasText: 'Notionに保管' }).click();
+  await page.getByRole('button', { name: 'はじめる' }).click();
   await expect(page.getByText(/途中で止まりました/)).toBeVisible();
   await expect(page.getByText('Notionが混み合っています')).toBeVisible();
   await page.screenshot({ path: shot(page, 'failure'), animations: 'disabled' });

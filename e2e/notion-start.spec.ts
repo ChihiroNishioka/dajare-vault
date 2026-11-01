@@ -1,4 +1,7 @@
+import { mkdirSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
+
+mkdirSync('screenshots/notion', { recursive: true });
 
 type Calls = { total: number; ensure: number; upsert: number; archive: number; finish: number };
 type RelayOpts = {
@@ -161,7 +164,11 @@ test('S06 a direct hash and a reload only open the panel', async ({ page }) => {
 });
 
 test('S07 backup starts only from はじめる', async ({ page }) => {
-  const calls = await relay(page);
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls = await relay(page, { holdFirstUpsert: hold });
   await openEditor(page);
   const cards = await page.locator('dajare-card').count();
   await headerNotion(page).click();
@@ -174,6 +181,7 @@ test('S07 backup starts only from はじめる', async ({ page }) => {
     path: `screenshots/notion/start_running_${page.viewportSize()?.width ?? 0}.png`,
     animations: 'disabled',
   });
+  release();
   await expect(page.getByText(/最終保管/)).toBeVisible();
   expect(calls).toMatchObject({
     ensure: 1,
@@ -336,7 +344,7 @@ test('S13 declining the archive confirm closes and does not finish', async ({ pa
   await page.keyboard.press('Escape');
   await settle(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(calls.archive).toBe(archives + 1);
+  expect(calls.archive).toBe(archives);
   expect(calls.finish).toBe(0);
 });
 
@@ -438,9 +446,10 @@ test('S20 logout while running stops later relay calls', async ({ page }) => {
   await page.goto('/dajare-vault/?mock=editor#notion');
   await startButton(page).click();
   await expect(page.getByText(/送っています/)).toBeVisible();
-  await page
-    .locator('[data-action="sign-out"]')
-    .evaluate((button: HTMLButtonElement) => button.click());
+  await page.evaluate(() => {
+    const button = document.querySelector('[data-action="sign-out"]') as HTMLButtonElement | null;
+    button?.click();
+  });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const atLogout = calls.total;
   release();
@@ -479,7 +488,9 @@ test('S22 the header click itself sends no request', async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
   const seen: string[] = [];
   page.on('request', (request) => {
-    seen.push(request.url());
+    const url = request.url();
+    if (url.startsWith('https://fonts.') || url.startsWith('https://fonts.gstatic.com')) return;
+    seen.push(url);
   });
   await headerNotion(page).click();
   await expect(page.getByText(IDLE)).toBeVisible();

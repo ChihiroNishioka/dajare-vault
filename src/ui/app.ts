@@ -117,7 +117,9 @@ export function mount(
   let cloudBootError: string | null = null;
   let dismissMockSignIn = false;
   let notionBusy = false;
+  let notionGeneration = 0;
   let notionMode: 'idle' | 'running' | 'confirm' | 'done' = 'idle';
+  let notionText = '';
   let confirmArchive: ((ok: boolean) => void) | null = null;
   let lastNotionBackup: string | null = null;
   const signedIn = (): boolean => {
@@ -279,9 +281,9 @@ export function mount(
     root.querySelectorAll<HTMLButtonElement>('[data-action="settings"]').forEach((button) => {
       button.hidden = !signedIn();
     });
-    root.querySelectorAll<HTMLButtonElement>('[data-action="notion-backup"]').forEach((button) => {
+    root.querySelectorAll<HTMLButtonElement>('[data-action="notion-open"]').forEach((button) => {
       button.hidden = !canNotion();
-      button.disabled = notionBusy || notionBlock() !== null;
+      button.disabled = notionBusy;
     });
     const dropBackup =
       (!signedIn() &&
@@ -563,13 +565,13 @@ export function mount(
     }
   });
 
-  root.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && ui.panel.kind !== 'closed') {
-      if (ui.panel.kind === 'form' && formDirty() && !window.confirm('書いた内容を捨てますか？'))
-        return;
-      closePanel();
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || ui.panel.kind === 'closed') return;
+    if (ui.panel.kind === 'form' && formDirty() && !window.confirm('書いた内容を捨てますか？'))
       return;
-    }
+    closePanel();
+  });
+  root.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.isComposing) return;
     const target = event.target as HTMLElement;
     if (target.id === 'tag-draft') {
@@ -604,13 +606,14 @@ export function mount(
     return '共有の紙を読めないので保管しません';
   };
 
-  const showNotion = (mode: 'idle' | 'running' | 'confirm' | 'done', text: string): void => {
-    const existing = panel.querySelector<HTMLElement>('[data-notion-status]');
-    if (ui.panel.kind === 'notion' && notionMode === mode && existing) {
-      existing.textContent = text;
-      return;
-    }
+  const showNotion = (
+    mode: 'idle' | 'running' | 'confirm' | 'done',
+    text: string,
+    force = false,
+  ): void => {
     notionMode = mode;
+    notionText = text;
+    if (!force && ui.panel.kind !== 'notion') return;
     ui.panel = { kind: 'notion' };
     panel.innerHTML = notionPanel(mode, text);
     openPanel();
@@ -622,10 +625,15 @@ export function mount(
       if (location.hash === '#notion') setBackupHash('');
       return;
     }
+    if (notionBusy) {
+      showNotion(notionMode === 'idle' ? 'running' : notionMode, notionText, true);
+      return;
+    }
     const block = notionBlock();
     showNotion(
       'idle',
       block ? blockText(block) : '紙を Notion に控えます。消えた紙の行はしまって残します。',
+      true,
     );
   };
 
@@ -676,49 +684,64 @@ export function mount(
     if (!canNotion() || notionBusy) return;
     const block = notionBlock();
     if (block) {
-      showNotion('idle', blockText(block));
+      showNotion('idle', blockText(block), true);
       return;
     }
     const relayUrl = notionRelayUrlForBackup();
     const entries = listedItems().map(toNotionEntry);
     if (entries.length === 0) {
-      showNotion('idle', blockText('empty'));
+      showNotion('idle', blockText('empty'), true);
       return;
     }
     notionBusy = true;
+    const generation = (notionGeneration += 1);
     syncAccount();
     if (!relayUrl) {
-      showNotion('done', NOTION_RELAY_MISSING);
+      showNotion('done', NOTION_RELAY_MISSING, true);
       notionBusy = false;
       syncAccount();
       return;
     }
-    showNotion('running', notionProgress(0, entries.length));
+    showNotion('running', notionProgress(0, entries.length), true);
     try {
       const token = await backupAuthToken();
+      if (generation !== notionGeneration) return;
       const result = await runNotionBackup({
         relayUrl,
         token,
         entries,
-        onProgress: (progress) => showNotion('running', progress.label),
+        shouldContinue: () => generation === notionGeneration,
+        onProgress: (progress) => {
+          if (generation !== notionGeneration) return;
+          showNotion('running', progress.label);
+        },
         onKnownBackup: (iso) => {
           lastNotionBackup = iso;
         },
         onConfirmArchive: (wouldArchive) =>
           new Promise((resolve) => {
+            if (generation !== notionGeneration || ui.panel.kind !== 'notion') {
+              resolve(false);
+              return;
+            }
             confirmArchive = resolve;
             showNotion('confirm', `${wouldArchive}件をNotionでしまします。続けますか？`);
           }),
       });
+      if (generation !== notionGeneration) return;
       lastNotionBackup = result.lastBackupAt;
       showNotion('done', notionSuccessMessage(result));
     } catch (error) {
+      if (generation !== notionGeneration) return;
       const message = error instanceof Error ? error.message : 'Notionへの保管に失敗しました';
+      if (message === 'しまっておく確認がありません' || message === '中止しました') return;
       showNotion('done', notionFailureMessage(message));
     } finally {
-      notionBusy = false;
-      confirmArchive = null;
-      syncAccount();
+      if (generation === notionGeneration) {
+        notionBusy = false;
+        confirmArchive = null;
+        syncAccount();
+      }
     }
   };
 
@@ -781,6 +804,11 @@ export function mount(
     if (action === 'settings') {
       if (!signedIn()) return;
       openSettings();
+      return;
+    }
+    if (action === 'notion-open') {
+      if (!canNotion() || notionBusy) return;
+      openNotionPanel();
       return;
     }
     if (action === 'notion-backup') {
@@ -881,6 +909,10 @@ export function mount(
       return;
     }
     if (action === 'sign-out') {
+      notionGeneration += 1;
+      confirmArchive?.(false);
+      confirmArchive = null;
+      notionBusy = false;
       if (headerChrome && !cloudSignOut) {
         dismissMockSignIn = true;
         syncChrome();
@@ -1299,7 +1331,7 @@ function shell(): string {
           <div id="account" class="account"></div>
           <div class="mast-actions">
             <button type="button" class="add-button" data-action="add">追加</button>
-            <button type="button" class="texty" data-action="notion-backup" hidden>Notionに保管</button>
+            <button type="button" class="texty" data-action="notion-open" hidden>Notionに保管</button>
             <button type="button" class="texty" data-action="settings" hidden>保管</button>
           </div>
         </div>

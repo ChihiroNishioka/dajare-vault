@@ -153,12 +153,26 @@ export function settingsPanel(
   `;
 }
 
-export function notionPanel(mode: 'idle' | 'running' | 'confirm' | 'done', text: string): string {
+const BLOCKED_START = new Set([
+  '共有の紙を読み終えてから保管します',
+  '紙が無いので保管しません',
+  '共有の紙を読めないので保管しません',
+]);
+
+export function notionPanel(
+  mode: 'idle' | 'running' | 'confirm' | 'done',
+  text: string,
+  options?: { startDisabled?: boolean },
+): string {
   const bad = mode === 'done' && text.startsWith('Notionへの保管が途中');
-  const start =
-    mode === 'idle'
-      ? '<button type="button" class="primary" data-action="notion-backup">はじめる</button>'
-      : '';
+  const startDisabled =
+    options?.startDisabled === true ||
+    mode === 'running' ||
+    (mode === 'idle' && BLOCKED_START.has(text));
+  const showStart = mode === 'idle' || mode === 'running' || bad;
+  const start = showStart
+    ? `<button type="button" class="primary" data-action="notion-backup"${startDisabled ? ' disabled' : ''}>はじめる</button>`
+    : '';
   const go =
     mode === 'confirm'
       ? '<button type="button" class="primary" data-action="notion-confirm">続ける</button>'

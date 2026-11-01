@@ -86,6 +86,7 @@ export async function runNotionBackup(options: {
   onProgress?: (progress: BackupProgress) => void;
   onConfirmArchive?: (wouldArchive: number) => Promise<boolean>;
   onKnownBackup?: (iso: string) => void;
+  shouldContinue?: () => boolean;
 }): Promise<BackupCounts> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep =
@@ -93,6 +94,7 @@ export async function runNotionBackup(options: {
   const entries = dedupeEntries(options.entries);
   if (entries.length === 0) throw new Error('紙がありません');
   const post = async (body: unknown) => {
+    if (options.shouldContinue && !options.shouldContinue()) throw new Error('中止しました');
     for (;;) {
       const payload = (await postJson(options.relayUrl, options.token, body, fetchImpl)) as {
         retryAfterMs?: number;
