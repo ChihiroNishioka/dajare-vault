@@ -73,7 +73,18 @@ async function relay(page: Page, opts: RelayOpts = {}): Promise<Calls> {
   return calls;
 }
 
-const settle = (page: Page) => page.waitForTimeout(800);
+async function backupSettled(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as { __dajareBackupState?: () => { settled: boolean } }
+          ).__dajareBackupState?.().settled ?? false,
+      ),
+    )
+    .toBe(true);
+}
 
 async function openEditor(page: Page, hash = ''): Promise<void> {
   await page.goto(`/dajare-vault/?mock=editor${hash}`);
@@ -131,8 +142,7 @@ test('S04 the header button only opens the idle panel', async ({ page }) => {
   await expect(startButton(page)).toBeEnabled();
   await expect(page.getByText(IDLE)).toBeVisible();
   await expect(page).toHaveURL(/#notion/);
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
   await page.screenshot({
     path: `screenshots/notion/start_idle_${page.viewportSize()?.width ?? 0}.png`,
     animations: 'disabled',
@@ -148,8 +158,7 @@ test('S05 repeated header clicks never call the relay', async ({ page }) => {
     await page.getByRole('button', { name: '閉じる' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   }
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S06 a direct hash and a reload only open the panel', async ({ page }) => {
@@ -159,8 +168,7 @@ test('S06 a direct hash and a reload only open the panel', async ({ page }) => {
   await page.reload();
   await expect(page.getByText(IDLE)).toBeVisible();
   await expect(startButton(page)).toBeEnabled();
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S07 backup starts only from はじめる', async ({ page }) => {
@@ -173,8 +181,7 @@ test('S07 backup starts only from はじめる', async ({ page }) => {
   const cards = await page.locator('dajare-card').count();
   await headerNotion(page).click();
   await expect(page.getByText(IDLE)).toBeVisible();
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
   await startButton(page).click();
   await expect(page.getByText(/送っています/)).toBeVisible();
   await page.screenshot({
@@ -238,13 +245,13 @@ test('S08 a failure stays put until はじめる retries from ensure', async ({ 
     animations: 'disabled',
   });
   const afterFailure = calls.total;
-  await settle(page);
+  await backupSettled(page);
   expect(calls.total).toBe(afterFailure);
   fail = false;
   const ensuresBeforeRetry = calls.ensure;
   await startButton(page).click();
   await expect(page.getByText(/最終保管/)).toBeVisible();
-  expect(calls.ensure).toBe(ensuresBeforeRetry + 1);
+  await expect.poll(() => calls.ensure).toBe(ensuresBeforeRetry + 1);
 });
 
 test('S09 a second はじめる while running does nothing', async ({ page }) => {
@@ -261,11 +268,11 @@ test('S09 a second はじめる while running does nothing', async ({ page }) =>
   await expect(page.getByText(/送っています/)).toBeVisible();
   await expect(startButton(page)).toBeVisible();
   await expect(startButton(page)).toBeDisabled();
-  expect(calls.ensure).toBe(1);
+  await expect.poll(() => calls.ensure).toBe(1);
   release();
   await expect(page.getByText(/最終保管/)).toBeVisible();
-  expect(calls.ensure).toBe(1);
-  expect(calls.finish).toBe(1);
+  await expect.poll(() => calls.ensure).toBe(1);
+  await expect.poll(() => calls.finish).toBe(1);
 });
 
 test('S10 close and Esc leave the idle panel without a request', async ({ page }) => {
@@ -275,11 +282,11 @@ test('S10 close and Esc leave the idle panel without a request', async ({ page }
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
   await page.goto('/dajare-vault/?mock=editor#notion');
+  await expect(page.getByRole('dialog')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S11 closing while running does not reopen when it finishes', async ({ page }) => {
@@ -296,7 +303,7 @@ test('S11 closing while running does not reopen when it finishes', async ({ page
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
   release();
-  await settle(page);
+  await backupSettled(page);
   await expect(page.getByText(/最終保管/)).toHaveCount(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
@@ -319,10 +326,16 @@ test('S12 reopening while running shows progress and does not start again', asyn
   });
   await expect(page.getByText(/送っています/)).toBeVisible();
   await expect(startButton(page)).toBeDisabled();
-  expect(calls.ensure).toBe(1);
+  if ((page.viewportSize()?.width ?? 0) <= 500) {
+    await page.screenshot({
+      path: 'screenshots/notion/start_reopened_running_390.png',
+      animations: 'disabled',
+    });
+  }
+  await expect.poll(() => calls.ensure).toBe(1);
   release();
   await expect(page.getByText(/最終保管/)).toBeVisible();
-  expect(calls.ensure).toBe(1);
+  await expect.poll(() => calls.ensure).toBe(1);
 });
 
 test('S13 declining the archive confirm closes and does not finish', async ({ page }) => {
@@ -332,17 +345,18 @@ test('S13 declining the archive confirm closes and does not finish', async ({ pa
   await expect(page.getByRole('button', { name: '続ける' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'やめる' })).toBeVisible();
   await page.getByRole('button', { name: 'やめる' }).click();
-  await settle(page);
+  await backupSettled(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(calls.archive).toBe(1);
   expect(calls.finish).toBe(0);
 
   await page.goto('/dajare-vault/?mock=editor#notion');
   await startButton(page).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByRole('button', { name: 'やめる' })).toBeVisible();
   const archives = calls.archive;
   await page.keyboard.press('Escape');
-  await settle(page);
+  await backupSettled(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(calls.archive).toBe(archives);
   expect(calls.finish).toBe(0);
@@ -359,7 +373,7 @@ test('S14 continuing the archive confirm finishes', async ({ page }) => {
   await page.getByRole('button', { name: '続ける' }).click();
   await expect(page.getByText(/最終保管/)).toBeVisible();
   expect(bodies[1]).toMatchObject({ confirmArchive: true, cursor: null });
-  expect(calls.finish).toBe(1);
+  await expect.poll(() => calls.finish).toBe(1);
 });
 
 test('S15 a confirm that arrives after close does not resume', async ({ page }) => {
@@ -373,7 +387,7 @@ test('S15 a confirm that arrives after close does not resume', async ({ page }) 
   await expect(page.getByText(/送っています/)).toBeVisible();
   await page.getByRole('button', { name: '閉じる' }).click();
   release();
-  await settle(page);
+  await backupSettled(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(calls.archive).toBe(1);
   expect(calls.finish).toBe(0);
@@ -388,8 +402,7 @@ test('S16 reopening after success is idle and does not run again', async ({ page
   await page.getByRole('button', { name: '閉じる' }).click();
   await headerNotion(page).click();
   await expect(page.getByText(IDLE)).toBeVisible();
-  await settle(page);
-  expect(calls.ensure).toBe(1);
+  await expect.poll(() => calls.ensure).toBe(1);
 });
 
 test('S17 flipping the hash does not call the relay', async ({ page }) => {
@@ -399,13 +412,13 @@ test('S17 flipping the hash does not call the relay', async ({ page }) => {
     await page.evaluate(() => {
       location.hash = '';
     });
-    await page.waitForTimeout(300);
     await page.evaluate(() => {
       location.hash = '#notion';
     });
-    await page.waitForTimeout(300);
+    await expect(page.getByText(IDLE)).toBeVisible();
+    await expect(startButton(page)).toBeEnabled();
   }
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S18 back and forward do not call the relay', async ({ page }) => {
@@ -416,10 +429,10 @@ test('S18 back and forward do not call the relay', async ({ page }) => {
   });
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.goBack();
-  await settle(page);
   await page.goForward();
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect(page.getByText(IDLE)).toBeVisible();
+  await expect(startButton(page)).toBeEnabled();
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S19 an empty vault can open the panel but cannot start', async ({ page }) => {
@@ -433,8 +446,7 @@ test('S19 an empty vault can open the panel but cannot start', async ({ page }) 
   await headerNotion(page).click();
   await expect(page.getByText(EMPTY)).toBeVisible();
   await expect(startButton(page)).toBeDisabled();
-  await settle(page);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S20 logout while running stops later relay calls', async ({ page }) => {
@@ -453,7 +465,7 @@ test('S20 logout while running stops later relay calls', async ({ page }) => {
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const atLogout = calls.total;
   release();
-  await settle(page);
+  await backupSettled(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
   expect(calls.total).toBe(atLogout);
@@ -461,7 +473,6 @@ test('S20 logout while running stops later relay calls', async ({ page }) => {
   await page.evaluate(() => {
     location.hash = '#notion';
   });
-  await settle(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page).not.toHaveURL(/#notion/);
 });
@@ -478,9 +489,8 @@ test('S21 logout from the idle panel does not reopen it', async ({ page }) => {
   await page.evaluate(() => {
     location.hash = '#notion';
   });
-  await settle(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(calls.total).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
 });
 
 test('S22 the header click itself sends no request', async ({ page }) => {
@@ -494,6 +504,217 @@ test('S22 the header click itself sends no request', async ({ page }) => {
   });
   await headerNotion(page).click();
   await expect(page.getByText(IDLE)).toBeVisible();
-  await settle(page);
-  expect(seen).toEqual([]);
+  await expect.poll(() => seen.length).toBe(0);
+});
+
+test('S23 signing in while the hash is open does not start a backup', async ({ page }) => {
+  const calls = await relay(page);
+  await page.goto('/dajare-vault/?mock=signed-out#notion');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => calls.total).toBe(0);
+  await page.evaluate(() => {
+    history.replaceState(null, '', `${location.pathname}${location.search}#notion`);
+    (
+      window as unknown as {
+        __dajareTestAuth?: (next: { signedIn: boolean; editor: boolean }) => void;
+      }
+    ).__dajareTestAuth?.({ signedIn: true, editor: true });
+  });
+  await expect(page.getByText(IDLE)).toBeVisible();
+  await expect(startButton(page)).toBeEnabled();
+  await expect.poll(() => calls.ensure).toBe(0);
+  await expect.poll(() => calls.total).toBe(0);
+});
+
+test('H2 losing editor rights without the logout button stops later calls', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls = await relay(page, { holdFirstUpsert: hold });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByText(/送っています/)).toBeVisible();
+  const hooked = await page.evaluate(() => {
+    const hook = (
+      window as unknown as {
+        __dajareTestAuth?: (next: { signedIn: boolean; editor: boolean }) => void;
+      }
+    ).__dajareTestAuth;
+    if (!hook) return false;
+    hook({ signedIn: true, editor: false });
+    return true;
+  });
+  expect(hooked).toBe(true);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(headerNotion(page)).toBeHidden();
+  const atStop = calls.total;
+  release();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as { __dajareBackupState?: () => { settled: boolean } }
+          ).__dajareBackupState?.().settled,
+      ),
+    )
+    .toBe(true);
+  expect(calls.finish).toBe(0);
+  expect(calls.total).toBe(atStop);
+});
+
+test('H2 signing out without the logout button stops later calls', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls = await relay(page, { holdFirstUpsert: hold });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByText(/送っています/)).toBeVisible();
+  const hooked = await page.evaluate(() => {
+    const hook = (
+      window as unknown as {
+        __dajareTestAuth?: (next: { signedIn: boolean; editor: boolean }) => void;
+      }
+    ).__dajareTestAuth;
+    if (!hook) return false;
+    hook({ signedIn: false, editor: false });
+    return true;
+  });
+  expect(hooked).toBe(true);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(headerNotion(page)).toBeHidden();
+  const atStop = calls.total;
+  release();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as { __dajareBackupState?: () => { settled: boolean } }
+          ).__dajareBackupState?.().settled,
+      ),
+    )
+    .toBe(true);
+  expect(calls.finish).toBe(0);
+  expect(calls.total).toBe(atStop);
+});
+
+test('H1 reopening after a hidden failure shows the failure', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('https://notion-backup.test/**', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}') as {
+      op?: string;
+      entries?: unknown[];
+    };
+    if (body.op === 'ensure') {
+      await route.fulfill({ json: { databaseId: 'db-1', lastBackupAt: null } });
+      return;
+    }
+    if (body.op === 'upsert') {
+      if (body.entries) await hold;
+      await route.fulfill({
+        json: { created: 0, updated: body.entries?.length ?? 0, unchanged: 0 },
+      });
+      return;
+    }
+    if (body.op === 'archive') {
+      await route.fulfill({ status: 502, json: { error: 'Notionが混み合っています' } });
+      return;
+    }
+    await route.fulfill({ json: { lastBackupAt: '2026-11-01T08:00:00.000Z' } });
+  });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByText(/送っています/)).toBeVisible();
+  await page.getByRole('button', { name: '閉じる' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  release();
+  await expect.poll(() => headerNotion(page).isEnabled()).toBe(true);
+  await headerNotion(page).click();
+  await expect(page.getByText(/途中で止まりました/)).toBeVisible();
+  await expect(startButton(page)).toBeEnabled();
+  if ((page.viewportSize()?.width ?? 0) <= 500) {
+    await page.screenshot({
+      path: 'screenshots/notion/start_reopened_failure_390.png',
+      animations: 'disabled',
+    });
+  }
+});
+
+test('M1 continue closes the confirm dialog before the next archive', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('https://notion-backup.test/**', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}') as {
+      op?: string;
+      entries?: unknown[];
+      confirmArchive?: boolean;
+    };
+    if (body.op === 'ensure') {
+      await route.fulfill({ json: { databaseId: 'db-1', lastBackupAt: null } });
+      return;
+    }
+    if (body.op === 'upsert') {
+      await route.fulfill({
+        json: { created: 0, updated: body.entries?.length ?? 0, unchanged: 0 },
+      });
+      return;
+    }
+    if (body.op === 'archive' && !body.confirmArchive) {
+      await route.fulfill({
+        json: {
+          archived: 0,
+          done: false,
+          nextCursor: null,
+          needConfirm: true,
+          wouldArchive: 9999,
+        },
+      });
+      return;
+    }
+    if (body.op === 'archive') {
+      await hold;
+      await route.fulfill({ json: { archived: 0, done: true, nextCursor: null } });
+      return;
+    }
+    await route.fulfill({ json: { lastBackupAt: '2026-11-01T08:00:00.000Z' } });
+  });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByRole('button', { name: '続ける' })).toBeVisible();
+  await page.getByRole('button', { name: '続ける' }).click();
+  await expect(page.getByText(/送っています/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '続ける' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'やめる' })).toHaveCount(0);
+  release();
+  await expect(page.getByText(/最終保管/)).toBeVisible();
+});
+
+test('L7 opening settings while running still shows a later confirm', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls = await relay(page, { holdFirstUpsert: hold, archive: 'confirm' });
+  await page.goto('/dajare-vault/?mock=editor#notion');
+  await startButton(page).click();
+  await expect(page.getByText(/送っています/)).toBeVisible();
+  await page.evaluate(() => {
+    const button = document.querySelector('[data-action="settings"]') as HTMLButtonElement | null;
+    button?.click();
+  });
+  await expect(page.getByRole('heading', { name: '保管' })).toBeVisible();
+  release();
+  await expect(page.getByRole('button', { name: '続ける' })).toBeVisible();
+  await page.getByRole('button', { name: 'やめる' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => calls.finish).toBe(0);
 });

@@ -153,23 +153,14 @@ export function settingsPanel(
   `;
 }
 
-const BLOCKED_START = new Set([
-  '共有の紙を読み終えてから保管します',
-  '紙が無いので保管しません',
-  '共有の紙を読めないので保管しません',
-]);
-
 export function notionPanel(
   mode: 'idle' | 'running' | 'confirm' | 'done',
   text: string,
-  options?: { startDisabled?: boolean },
+  options?: { failure?: boolean; allowStart?: boolean },
 ): string {
-  const bad = mode === 'done' && text.startsWith('Notionへの保管が途中');
-  const startDisabled =
-    options?.startDisabled === true ||
-    mode === 'running' ||
-    (mode === 'idle' && BLOCKED_START.has(text));
-  const showStart = mode === 'idle' || mode === 'running' || bad;
+  const failure = options?.failure === true;
+  const startDisabled = mode === 'running' || (mode === 'idle' && options?.allowStart === false);
+  const showStart = mode === 'idle' || mode === 'running' || (mode === 'done' && failure);
   const start = showStart
     ? `<button type="button" class="primary" data-action="notion-backup"${startDisabled ? ' disabled' : ''}>はじめる</button>`
     : '';
@@ -180,7 +171,7 @@ export function notionPanel(
   return `
     <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <h2 id="panel-title">Notionに保管</h2>
-      <p class="${bad ? 'field-error' : ''}" data-notion-status>${escapeHtml(text)}</p>
+      <p class="${failure ? 'field-error' : ''}" data-notion-status>${escapeHtml(text)}</p>
       <div class="sheet-actions">
         ${start}
         ${go}
