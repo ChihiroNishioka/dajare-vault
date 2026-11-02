@@ -11,7 +11,13 @@ import {
   type ImportDecisions,
   type ImportPlan,
 } from '../domain/transfer';
-import { codePointLength, LIMITS, READING_RE, REQUIRED_FIELDS } from '../domain/validate';
+import {
+  codePointLength,
+  LIMITS,
+  READING_RE,
+  REQUIRED_FIELDS,
+  requiredEmptyMessage,
+} from '../domain/validate';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import type { DajareStore } from '../store/dajare-store';
 import { adaptLocalStore } from '../store/local-dajare-store';
@@ -437,7 +443,7 @@ export function mount(
     if (!form || !save) return;
     const data = new FormData(form);
     save.disabled = REQUIRED_FIELDS.some(
-      (field) => String(data.get(field) ?? '').trim().length === 0,
+      (item) => String(data.get(item.field) ?? '').trim().length === 0,
     );
     updateCounters(form);
     const reading = String(new FormData(form).get('reading') ?? '').trim();
@@ -611,15 +617,11 @@ export function mount(
     const target = event.target as HTMLElement;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
     if (!target.closest('#dajare-form')) return;
-    const name = target.name;
-    if (name !== 'text' && name !== 'scene') return;
-    const slot = panel.querySelector<HTMLElement>(`[data-error-for="${name}"]`);
+    const message = requiredEmptyMessage(target.name);
+    if (!message) return;
+    const slot = panel.querySelector<HTMLElement>(`[data-error-for="${target.name}"]`);
     if (!slot) return;
-    slot.textContent = target.value.trim()
-      ? ''
-      : name === 'text'
-        ? '本文を書いてください'
-        : 'シーンを書いてください';
+    slot.textContent = target.value.trim() ? '' : message;
   });
 
   const blockText = (block: BackupBlock): string => {
