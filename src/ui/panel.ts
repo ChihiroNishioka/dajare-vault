@@ -1,7 +1,7 @@
 import { localDateString } from '../domain/ids';
 import type { ImportPlan } from '../domain/transfer';
 import { LIMITS } from '../domain/validate';
-import { currentRequiredFields, formLabel, type RequiredName } from '../domain/required-fields';
+import { currentRequiredFields, FORM_FIELDS, type FormFieldName } from '../domain/required-fields';
 import type { Dajare } from '../types';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
@@ -15,12 +15,13 @@ function fieldName(label: string, required: boolean): string {
   return `<span class="field-name">${label}${mark}</span>`;
 }
 
-function named(field: RequiredName): string {
-  const item = currentRequiredFields().find((row) => row.field === field);
-  return fieldName(item?.label ?? formLabel(field), Boolean(item));
+function named(field: FormFieldName): string {
+  const definition = FORM_FIELDS.find((row) => row.field === field);
+  const required = currentRequiredFields().some((row) => row.field === field);
+  return fieldName(definition?.label ?? field, required);
 }
 
-function requiredAttr(field: RequiredName): string {
+function requiredAttr(field: FormFieldName): string {
   return currentRequiredFields().some((row) => row.field === field) ? ' aria-required="true"' : '';
 }
 

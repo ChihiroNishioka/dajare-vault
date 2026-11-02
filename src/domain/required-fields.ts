@@ -1,30 +1,15 @@
-const LABELS = {
-  text: '本文',
-  scene: 'シーン',
-} as const;
-
-export type RequiredName = keyof typeof LABELS;
-
-/** フォームの項目名。印や文言は、ここから取る。 */
-export function formLabel(field: RequiredName): string {
-  return LABELS[field];
-}
-
-/** 空では保存できない項目。印・保存ボタン・離れたとき・保存時のチェックは、この定義だけを見る。 */
-export const REQUIRED_FIELDS = [
-  {
-    field: 'text',
-    label: LABELS.text,
-    emptyMessage: `${LABELS.text}を書いてください`,
-  },
-  {
-    field: 'scene',
-    label: LABELS.scene,
-    emptyMessage: `${LABELS.scene}を書いてください`,
-  },
+/** 本文とシーンの表示名・長さ上限・空欄メッセージをまとめた定義。 */
+export const FORM_FIELDS = [
+  { field: 'text', label: '本文', max: 200, emptyMessage: '本文を書いてください' },
+  { field: 'scene', label: 'シーン', max: 100, emptyMessage: 'シーンを書いてください' },
 ] as const;
 
-export type RequiredField = (typeof REQUIRED_FIELDS)[number];
+export type FormFieldName = (typeof FORM_FIELDS)[number]['field'];
+
+/** 空では保存できない項目。印・保存ボタン・離れたとき・保存時のチェックは、この定義だけを見る。 */
+export const REQUIRED_FIELDS = FORM_FIELDS;
+
+export type RequiredField = (typeof FORM_FIELDS)[number];
 
 let active: readonly RequiredField[] = REQUIRED_FIELDS;
 
