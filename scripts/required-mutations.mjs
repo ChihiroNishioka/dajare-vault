@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
-const file = 'src/ui/app.ts';
-const original = readFileSync(file, 'utf8');
+const file = "src/ui/app.ts";
+const original = readFileSync(file, "utf8");
 
 const saveNeedle = `    save.disabled = REQUIRED_FIELDS.some(
       (item) => String(data.get(item.field) ?? '').trim().length === 0,
@@ -31,9 +31,14 @@ const blurBroken = `    if (target.name !== 'text' && target.name !== 'scene') r
 
 function runTests() {
   const result = spawnSync(
-    'npx',
-    ['vitest', 'run', 'tests/required-fields.test.ts', 'tests/required-one-empty.test.ts'],
-    { stdio: 'inherit' },
+    "npx",
+    [
+      "vitest",
+      "run",
+      "tests/required-fields.test.ts",
+      "tests/required-one-empty.test.ts",
+    ],
+    { stdio: "inherit" },
   );
   return result.status ?? 1;
 }
@@ -55,8 +60,8 @@ function check(name, needle, broken) {
 }
 
 const killed = [
-  check('M8', saveNeedle, saveBroken),
-  check('M7', blurNeedle, blurBroken),
+  check("M8", saveNeedle, saveBroken),
+  check("M7", blurNeedle, blurBroken),
 ].every(Boolean);
 
 if (!killed) process.exit(1);
