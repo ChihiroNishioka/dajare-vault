@@ -98,3 +98,74 @@ it('signs in from the Google button credential and has no popup sign-in', async 
   expect(signInWithPopup).toHaveBeenCalledTimes(0);
   expect('signIn' in connection).toBe(false);
 });
+
+it('tells the button once when the Google script fails to load', async () => {
+  vi.resetModules();
+  const statuses: string[] = [];
+  Object.assign(globalThis, {
+    window: {},
+    document: {
+      createElement() {
+        return {
+          onload: null as null | (() => void),
+          onerror: null as null | (() => void),
+        };
+      },
+      head: {
+        append(script: { onerror: null | (() => void) }) {
+          script.onerror?.();
+        },
+      },
+    },
+  });
+  const { connectCloud } = await import('../src/cloud/connect');
+  const host = { childElementCount: 0 } as unknown as HTMLElement;
+  const connection = await connectCloud(dummyConfig());
+  connection.renderGoogleButton(host, (code) => {
+    statuses.push(code);
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(statuses).toEqual(['gsi-load']);
+});
+
+it('reports a rejected credential on the status callback', async () => {
+  vi.resetModules();
+  authMock.signInWithCredential.mockRejectedValueOnce({ code: 'auth/unknown' });
+  const calls: string[] = [];
+  let callback: ((response: { credential?: string }) => void) | undefined;
+  const statuses: string[] = [];
+  Object.assign(globalThis, {
+    window: {
+      google: {
+        accounts: {
+          id: {
+            initialize(config: Record<string, unknown>) {
+              calls.push('initialize');
+              callback = config.callback as (response: { credential?: string }) => void;
+            },
+            renderButton() {
+              calls.push('renderButton');
+            },
+          },
+        },
+      },
+    },
+    document: {
+      createElement: () => ({}),
+      head: { append() {} },
+    },
+  });
+  const { connectCloud } = await import('../src/cloud/connect');
+  const host = { childElementCount: 0 } as unknown as HTMLElement;
+  const connection = await connectCloud(dummyConfig());
+  connection.renderGoogleButton(host, (code) => {
+    statuses.push(code);
+  });
+  await Promise.resolve();
+  expect(calls).toEqual(['initialize', 'renderButton']);
+  callback?.({ credential: 'id-token' });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(statuses).toEqual(['auth/unknown']);
+});

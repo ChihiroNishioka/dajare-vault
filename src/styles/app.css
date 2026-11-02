@@ -244,8 +244,7 @@ h1 {
   align-items: center;
 }
 .mast-actions .add-button,
-.mast-actions button.texty,
-button.account-alt {
+.mast-actions button.texty {
   box-sizing: border-box;
   height: 2.5rem;
   min-height: 2.5rem;
@@ -260,8 +259,7 @@ button.account-alt {
 .mast-actions button.texty[hidden] {
   display: none;
 }
-.mast-actions button.texty,
-button.account-alt {
+.mast-actions button.texty {
   background: var(--card);
   box-shadow: 2px 2px 0 rgba(217, 205, 184, 0.95);
 }

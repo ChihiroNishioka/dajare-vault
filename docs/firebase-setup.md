@@ -12,7 +12,7 @@
 4. Authentication → ログイン方法 → Google を有効にする。
 5. Authentication → 設定 → 承認済みドメインに `chihironishioka.github.io` を足す。`https://` や `/dajare-vault/` は付けません。動作確認用の `localhost` も足します。
 
-ログインの主ボタンは Google Identity Services（accounts.google.com の「Google でログイン」）です。firebaseapp.com の認証ハンドラは使いません。押したあと、ID トークンで Firebase にサインインします。読み込めないときや、このページのアドレスが許可されていないときは、その旨を出して「別の方法でログイン」を使います。こちらはポップアップで、タップの中からすぐ開きます。リダイレクトには切り替えません。
+ログインは Google Identity Services（accounts.google.com の「Google でログイン」）だけです。firebaseapp.com の認証ハンドラは使いません。押したあと、ID トークンで Firebase にサインインします。読み込めないときは「Googleのログインボタンを読み込めませんでした。通信を確かめて、ページを読み込み直してください」と出します。別の入口はありません。このページのアドレスが許可されていないときは、その旨を出します。リダイレクトには切り替えません。
 
 Google Cloud の OAuth クライアントで、承認済みの JavaScript 生成元に `https://chihironishioka.github.io` を入れてください。スキームは付け、パスは付けません。
 
