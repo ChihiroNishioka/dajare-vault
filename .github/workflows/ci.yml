@@ -16,6 +16,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run test
+      - run: node scripts/required-mutations.mjs
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
