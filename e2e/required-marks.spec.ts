@@ -109,6 +109,27 @@ async function expectRequiredForm(page: Page, dialog: Locator, shotName: string)
   await expect(dialog.getByText('本文を書いてください')).toBeVisible();
   await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
   await expect(dialog).toBeVisible();
+  await expectEachRequiredFieldBlocksSave(dialog);
+}
+
+async function expectEachRequiredFieldBlocksSave(dialog: Locator): Promise<void> {
+  const names = await dialog
+    .locator('[aria-required="true"]')
+    .evaluateAll((nodes) => nodes.map((node) => (node as HTMLInputElement).name));
+  expect(names.length).toBeGreaterThan(1);
+  for (const emptyName of names) {
+    for (const name of names) {
+      const input = dialog.locator(`[name="${name}"]`);
+      await input.fill(name === emptyName ? '' : 'あり');
+      await input.blur();
+    }
+    await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
+    await expect(dialog.locator(`[data-error-for="${emptyName}"]`)).toHaveText(/.+/);
+    for (const other of names) {
+      if (other === emptyName) continue;
+      await expect(dialog.locator(`[data-error-for="${other}"]`)).toHaveText('');
+    }
+  }
 }
 
 test('signed-out visitors cannot open the add form', async ({ page }) => {
