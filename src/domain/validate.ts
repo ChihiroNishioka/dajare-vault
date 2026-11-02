@@ -57,6 +57,13 @@ export function normalizeTags(tags: string[]): { tags: string[]; error: string |
   return { tags: out, error: null };
 }
 
+/** 空では保存できない項目。入力チェックと必須の印は、この配列だけを見る。 */
+export const REQUIRED_FIELDS = ['text', 'scene'];
+
+export function isRequiredField(field: string): boolean {
+  return REQUIRED_FIELDS.includes(field);
+}
+
 export function normalizeSpeakers(speakers: string[]): {
   speakers: string[];
   error: string | null;
@@ -90,13 +97,15 @@ export function validateDraft(input: DajareDraft): ValidationResult {
   const addedAtNote = input.addedAtNote.trim();
   const addedAt = input.addedAt === null ? null : input.addedAt.trim() || null;
 
-  if (!text) errors.push({ field: 'text', message: '本文を書いてください' });
-  else if (text.length > LIMITS.text) {
+  if (isRequiredField('text') && !text) {
+    errors.push({ field: 'text', message: '本文を書いてください' });
+  } else if (text.length > LIMITS.text) {
     errors.push({ field: 'text', message: `本文は${LIMITS.text}文字以内にしてください` });
   }
 
-  if (!scene) errors.push({ field: 'scene', message: 'シーンを書いてください' });
-  else if (scene.length > LIMITS.scene) {
+  if (isRequiredField('scene') && !scene) {
+    errors.push({ field: 'scene', message: 'シーンを書いてください' });
+  } else if (scene.length > LIMITS.scene) {
     errors.push({ field: 'scene', message: `シーンは${LIMITS.scene}文字以内にしてください` });
   }
 

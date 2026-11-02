@@ -1,12 +1,23 @@
 import { localDateString } from '../domain/ids';
 import type { ImportPlan } from '../domain/transfer';
-import { LIMITS } from '../domain/validate';
+import { isRequiredField, LIMITS } from '../domain/validate';
 import type { Dajare } from '../types';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
 
 function counter(name: string, max: number): string {
   return `<span class="count" data-count-for="${name}">残り ${max}</span>`;
+}
+
+function fieldName(label: string, field: string): string {
+  const mark = isRequiredField(field)
+    ? '<span class="req" role="img" aria-label="必須">＊</span>'
+    : '';
+  return `<span class="field-name">${label}${mark}</span>`;
+}
+
+function requiredAttr(field: string): string {
+  return isRequiredField(field) ? ' aria-required="true"' : '';
 }
 
 function chips(id: string, values: string[]): string {
@@ -45,12 +56,13 @@ export function formPanel(
         <button type="button" data-action="close-panel">閉じる</button>
       </header>
       <form class="entry" id="dajare-form" novalidate>
-        <label>本文 ${counter('text', LIMITS.text)}
-          <textarea name="text" maxlength="${LIMITS.text}" rows="3">${escapeHtml(item?.text ?? '')}</textarea>
+        <p class="req-legend">＊は必須</p>
+        <label>${fieldName('本文', 'text')} ${counter('text', LIMITS.text)}
+          <textarea name="text" maxlength="${LIMITS.text}" rows="3"${requiredAttr('text')}>${escapeHtml(item?.text ?? '')}</textarea>
         </label>
         <p class="field-error" data-error-for="text"></p>
-        <label>シーン ${counter('scene', LIMITS.scene)}
-          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}" />
+        <label>${fieldName('シーン', 'scene')} ${counter('scene', LIMITS.scene)}
+          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}"${requiredAttr('scene')} />
         </label>
         <p class="field-error" data-error-for="scene"></p>
         <button type="button" class="quiet" data-action="scene-unknown">分からなければ「不明」</button>

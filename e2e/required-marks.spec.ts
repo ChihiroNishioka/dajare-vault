@@ -24,6 +24,7 @@ async function shot(page: Page, name: string): Promise<void> {
       page.screenshot({
         path: `${dir}/required_${name}_${device}.png`,
         animations: 'disabled',
+        fullPage: true,
       }),
     ),
   );
@@ -54,7 +55,7 @@ async function openAdd(page: Page): Promise<Locator> {
 }
 
 function labelFor(dialog: Locator, name: string): Locator {
-  return dialog.locator('label').filter({ has: dialog.locator(`[name="${name}"]`) });
+  return dialog.locator(`label:has([name="${name}"])`);
 }
 
 async function sameLine(label: Locator): Promise<boolean> {
@@ -72,7 +73,7 @@ async function sameLine(label: Locator): Promise<boolean> {
   });
 }
 
-async function expectRequiredForm(page: Page, dialog: Locator): Promise<void> {
+async function expectRequiredForm(page: Page, dialog: Locator, shotName: string): Promise<void> {
   await expect(dialog.getByText('＊は必須', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('img', { name: '必須' })).toHaveCount(2);
   for (const name of ['text', 'scene'] as const) {
@@ -100,24 +101,33 @@ async function expectRequiredForm(page: Page, dialog: Locator): Promise<void> {
   const text = await dialog.locator('textarea[name="text"]').boundingBox();
   expect(legend && text && legend.y < text.y).toBe(true);
 
-  await shot(page, 'add');
+  await shot(page, shotName);
 
   await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
   await dialog.locator('textarea[name="text"]').fill('   ');
   await dialog.locator('textarea[name="text"]').blur();
   await expect(dialog.getByText('本文を書いてください')).toBeVisible();
   await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
-  await expect(page.locator('dajare-card', { hasText: '   ' })).toHaveCount(0);
+  await expect(dialog).toBeVisible();
 }
+
+test('signed-out visitors cannot open the add form', async ({ page }) => {
+  await page.goto('/dajare-vault/?mock=signed-out');
+  await page.evaluate(() => localStorage.clear());
+  await page.goto('/dajare-vault/?mock=signed-out');
+  await expect(page.locator('dajare-card').first()).toBeVisible();
+  await expect(page.locator('.masthead').getByRole('button', { name: '追加' })).toBeHidden();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
 
 test('a signed-in mock add form marks only the required fields', async ({ page }) => {
   await openEditor(page);
   const dialog = await openAdd(page);
-  await expectRequiredForm(page, dialog);
+  await expectRequiredForm(page, dialog, 'mock');
 });
 
 test('local mode add form marks only the required fields', async ({ page }) => {
   await openLocal(page);
   const dialog = await openAdd(page);
-  await expectRequiredForm(page, dialog);
+  await expectRequiredForm(page, dialog, 'local');
 });

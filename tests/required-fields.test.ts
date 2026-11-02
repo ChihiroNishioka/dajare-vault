@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from 'vitest';
-import { validateDraft } from '../src/domain/validate';
+import { REQUIRED_FIELDS, validateDraft } from '../src/domain/validate';
 import { formPanel } from '../src/ui/panel';
 import type { DajareDraft } from '../src/types';
 
@@ -48,4 +48,28 @@ it('marks exactly the fields that the check rejects when they are empty', () => 
       ?.querySelector('.req')
       ?.getAttribute('aria-label'),
   ).toBe('必須');
+});
+
+it('drops the mark and the empty check together when a field leaves the list', () => {
+  const index = REQUIRED_FIELDS.indexOf('scene');
+  expect(index).toBeGreaterThanOrEqual(0);
+  const removed = REQUIRED_FIELDS.splice(index, 1);
+  try {
+    document.body.innerHTML = formPanel('add', null, [], []);
+    expect(
+      document.querySelector('input[name="scene"]')?.closest('label')?.querySelector('.req'),
+    ).toBeNull();
+    expect(document.querySelector('textarea[name="text"]')?.getAttribute('aria-required')).toBe(
+      'true',
+    );
+    expect(document.querySelector('input[name="scene"]')?.hasAttribute('aria-required')).toBe(
+      false,
+    );
+    const result = validateDraft({ ...blank(), text: 'ある' });
+    expect(result.errors.some((error) => error.field === 'scene')).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(validateDraft(blank()).errors.map((error) => error.field)).toEqual(['text']);
+  } finally {
+    REQUIRED_FIELDS.splice(index, 0, ...removed);
+  }
 });

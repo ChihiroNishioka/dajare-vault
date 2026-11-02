@@ -728,6 +728,17 @@ body.panel-open .app {
 .entry label {
   color: var(--ink);
 }
+.field-name {
+  white-space: nowrap;
+}
+.req {
+  color: #c4232a;
+}
+.req-legend {
+  margin: 0 0 0.35rem;
+  color: var(--quiet);
+  font-size: 0.82rem;
+}
 .entry textarea {
   resize: vertical;
   min-height: 4.5rem;
