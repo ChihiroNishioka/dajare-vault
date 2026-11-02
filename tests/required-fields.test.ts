@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from 'vitest';
-import { REQUIRED_FIELDS, validateDraft } from '../src/domain/validate';
+import { LIMITS, REQUIRED_FIELDS, validateDraft } from '../src/domain/validate';
 import { useRequiredFields } from '../src/domain/required-fields';
 import { formPanel } from '../src/ui/panel';
 import { mount } from '../src/ui/app';
@@ -51,6 +51,14 @@ it('marks exactly the fields that the check rejects when they are empty', () => 
   expect(star?.hasAttribute('aria-label')).toBe(false);
 });
 
+it('shows the required mark on each required field in the edit form', () => {
+  document.body.innerHTML = formPanel('edit', null, [], []);
+  for (const field of REQUIRED_FIELDS) {
+    const input = document.querySelector(`[name="${field.field}"]`);
+    expect(input?.closest('label')?.querySelector('.req')?.textContent).toBe('＊');
+  }
+});
+
 function setField(root: ParentNode, name: string, value: string): void {
   const input = root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="${name}"]`);
   if (!input) throw new Error(`missing ${name}`);
@@ -58,6 +66,33 @@ function setField(root: ParentNode, name: string, value: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
 }
+
+it('marks an invalid required field and clears aria-invalid after it is fixed', () => {
+  window.history.replaceState(null, '', '/?mock=editor');
+  const root = document.createElement('div');
+  document.body.replaceChildren(root);
+  mount(root);
+  root.querySelector<HTMLButtonElement>('[data-action="add"]')?.click();
+
+  setField(root, 'text', '');
+  const text = root.querySelector<HTMLTextAreaElement>('[name="text"]');
+  expect(text?.getAttribute('aria-invalid')).toBe('true');
+
+  setField(root, 'text', '本文');
+  expect(text?.getAttribute('aria-invalid')).toBe('false');
+});
+
+it('enforces the length limit for a field removed from the required set', () => {
+  const fields = REQUIRED_FIELDS.filter((item) => item.field !== 'text');
+  useRequiredFields(fields, () => {
+    const result = validateDraft({ ...blank(), text: 'あ'.repeat(LIMITS.text + 1), scene: '場面' });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContainEqual({
+      field: 'text',
+      message: `本文は${LIMITS.text}文字以内にしてください`,
+    });
+  });
+});
 
 it.each(['text', 'scene'] as const)(
   'swapping the required entry drops %s from the mark, the save button, blur, and the save check',

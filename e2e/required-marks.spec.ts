@@ -151,6 +151,11 @@ test('the edit form marks the same required fields', async ({ page }) => {
   await expect(dialog.getByRole('heading', { name: '書き直す' })).toBeVisible();
   await expect(dialog.getByText('＊は必須', { exact: true })).toBeVisible();
   await expect(dialog.locator('[aria-required="true"]')).toHaveCount(2);
+  for (const name of ['text', 'scene']) {
+    const label = labelFor(dialog, name);
+    await expect(label.locator('.req')).toHaveText('＊');
+    await expect(label.locator('.req')).toHaveAttribute('aria-hidden', 'true');
+  }
   await expect(dialog.locator('textarea[name="text"]')).toHaveAttribute('aria-required', 'true');
   await expect(dialog.locator('input[name="scene"]')).toHaveAttribute('aria-required', 'true');
   await expect(dialog.locator('[data-error-for="text"]')).toHaveAttribute('aria-live', 'polite');

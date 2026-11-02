@@ -17,7 +17,7 @@ import {
   serialize,
   shouldMarkUploaded,
 } from '../src/domain/transfer';
-import { normalizeTags, validateDraft } from '../src/domain/validate';
+import { LIMITS, normalizeTags, validateDraft } from '../src/domain/validate';
 import { applyMigrations } from '../src/migrations/runner';
 import { classicItems } from '../src/data/classic';
 import { buildSeed } from '../src/data/build-seed';
@@ -71,6 +71,10 @@ describe('validateDraft', () => {
   });
 
   it('caps length and warns on reading without blocking', () => {
+    expect(validateDraft(draft({ text: 'あ'.repeat(LIMITS.text) })).ok).toBe(true);
+    expect(validateDraft(draft({ text: 'あ'.repeat(LIMITS.text + 1) })).ok).toBe(false);
+    expect(validateDraft(draft({ scene: 'あ'.repeat(LIMITS.scene) })).ok).toBe(true);
+    expect(validateDraft(draft({ scene: 'あ'.repeat(LIMITS.scene + 1) })).ok).toBe(false);
     expect(validateDraft(draft({ text: 'あ'.repeat(201) })).ok).toBe(false);
     expect(validateDraft(draft({ scene: 'あ'.repeat(101) })).ok).toBe(false);
     const warned = validateDraft(draft({ reading: 'カタカナ' }));
