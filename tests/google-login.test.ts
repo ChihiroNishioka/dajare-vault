@@ -18,7 +18,10 @@ describe('login messages', () => {
     expect(loginFailureMessage('gsi-origin')).toBe(
       'このページのアドレスが、ログインの許可リストに入っていません',
     );
-    expect(loginFailureMessage('gsi-load')).toMatch(/別の方法でログイン/);
+    expect(loginFailureMessage('gsi-load')).toBe(
+      'Googleのログインボタンを読み込めませんでした。通信を確かめて、ページを読み込み直してください',
+    );
+    expect(loginFailureMessage('gsi-load')).not.toMatch(/別の方法/);
     expect(loginFailureMessage('not-editor')).toMatch(/見るだけ/);
   });
 

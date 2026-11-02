@@ -121,6 +121,14 @@ async function shot(page: Page, name: string): Promise<void> {
   });
 }
 
+test('signed-out offers only the Google placeholder', async ({ page }) => {
+  await openMock(page, 'signed-out');
+  await expect(page.locator('.gsi-placeholder')).toBeVisible();
+  await expect(page.locator('.account-alt')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '別の方法でログイン' })).toHaveCount(0);
+  await expect(page.locator('.login-row button')).toHaveCount(0);
+});
+
 test('signed-out header lines up', async ({ page }) => {
   await openMock(page, 'signed-out');
   await expect(page.getByRole('button', { name: '別の方法でログイン' })).toBeVisible();
