@@ -11,7 +11,7 @@ import {
   type ImportDecisions,
   type ImportPlan,
 } from '../domain/transfer';
-import { codePointLength, LIMITS, READING_RE } from '../domain/validate';
+import { codePointLength, LIMITS, READING_RE, REQUIRED_FIELDS } from '../domain/validate';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import type { DajareStore } from '../store/dajare-store';
 import { adaptLocalStore } from '../store/local-dajare-store';
@@ -435,9 +435,10 @@ export function mount(
     const form = panel.querySelector<HTMLFormElement>('#dajare-form');
     const save = panel.querySelector<HTMLButtonElement>('[data-action="save"]');
     if (!form || !save) return;
-    const text = String(new FormData(form).get('text') ?? '').trim();
-    const scene = String(new FormData(form).get('scene') ?? '').trim();
-    save.disabled = text.length === 0 || scene.length === 0;
+    const data = new FormData(form);
+    save.disabled = REQUIRED_FIELDS.some(
+      (field) => String(data.get(field) ?? '').trim().length === 0,
+    );
     updateCounters(form);
     const reading = String(new FormData(form).get('reading') ?? '').trim();
     const warn = panel.querySelector('#reading-warn');
