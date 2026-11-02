@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { expect, it } from 'vitest';
 import { REQUIRED_FIELDS, validateDraft } from '../src/domain/validate';
+import { useRequiredFields } from '../src/domain/required-fields';
 import { formPanel } from '../src/ui/panel';
+import { mount } from '../src/ui/app';
 import type { DajareDraft } from '../src/types';
 
 function blank(): DajareDraft {
@@ -49,22 +51,44 @@ it('marks exactly the fields that the check rejects when they are empty', () => 
   expect(star?.hasAttribute('aria-label')).toBe(false);
 });
 
+function setField(root: ParentNode, name: string, value: string): void {
+  const input = root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="${name}"]`);
+  if (!input) throw new Error(`missing ${name}`);
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+}
+
 it.each(['text', 'scene'] as const)(
-  'drops %s from the mark and the empty check together without editing the list',
+  'swapping the required entry drops %s from the mark, the save button, blur, and the save check',
   (field) => {
     const fields = REQUIRED_FIELDS.filter((item) => item.field !== field);
     const other = field === 'text' ? 'scene' : 'text';
-    document.body.innerHTML = formPanel('add', null, [], [], fields);
-    const dropped = document.querySelector(`[name="${field}"]`);
-    expect(dropped?.closest('label')?.querySelector('.req')).toBeNull();
-    expect(dropped?.hasAttribute('aria-required')).toBe(false);
-    expect(document.querySelector(`[name="${other}"]`)?.getAttribute('aria-required')).toBe('true');
-    const kept = validateDraft({ ...blank(), [other]: ' ' }, fields);
-    expect(kept.ok).toBe(false);
-    expect(kept.errors.map((error) => error.field)).toEqual([other]);
-    const released = validateDraft({ ...blank(), [other]: 'ある' }, fields);
-    expect(released.errors.some((error) => error.field === field)).toBe(false);
-    expect(released.ok).toBe(true);
+    const keptMessage = fields.find((item) => item.field === other)?.emptyMessage ?? '';
+    useRequiredFields(fields, () => {
+      window.history.replaceState(null, '', '/?mock=editor');
+      const root = document.createElement('div');
+      document.body.replaceChildren(root);
+      mount(root);
+      root.querySelector<HTMLButtonElement>('[data-action="add"]')?.click();
+      const dropped = root.querySelector<HTMLElement>(`[name="${field}"]`);
+      const kept = root.querySelector<HTMLElement>(`[name="${other}"]`);
+      expect(dropped?.closest('label')?.querySelector('.req')).toBeNull();
+      expect(dropped?.hasAttribute('aria-required')).toBe(false);
+      expect(kept?.getAttribute('aria-required')).toBe('true');
+      setField(root, other, 'あり');
+      setField(root, field, '');
+      const save = root.querySelector<HTMLButtonElement>('[data-action="save"]');
+      expect(save?.disabled).toBe(false);
+      expect(root.querySelector(`[data-error-for="${field}"]`)?.textContent ?? '').toBe('');
+      setField(root, other, '');
+      expect(root.querySelector(`[data-error-for="${other}"]`)?.textContent).toBe(keptMessage);
+      expect(save?.disabled).toBe(true);
+      expect(validateDraft({ ...blank(), [other]: 'あり' }).ok).toBe(true);
+      expect(
+        validateDraft({ ...blank(), [other]: ' ' }).errors.map((error) => error.field),
+      ).toEqual([other]);
+    });
     expect(REQUIRED_FIELDS.map((item) => item.field)).toEqual(['text', 'scene']);
   },
 );

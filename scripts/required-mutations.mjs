@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 const file = 'src/ui/app.ts';
 const original = readFileSync(file, 'utf8');
 
-const saveNeedle = `    save.disabled = REQUIRED_FIELDS.some(
+const saveNeedle = `    save.disabled = currentRequiredFields().some(
       (item) => String(data.get(item.field) ?? '').trim().length === 0,
     );`;
 
@@ -14,20 +14,16 @@ const saveBroken = `    const fixed = ['text', 'scene'];
     );`;
 
 const blurNeedle = `    const message = requiredEmptyMessage(target.name);
-    if (!message) return;
     const slot = panel.querySelector<HTMLElement>(\`[data-error-for="\${target.name}"]\`);
-    if (!slot) return;
-    slot.textContent = target.value.trim() ? '' : message;`;
+    if (!message || !slot) return;
+    paintFieldError(slot, target.value.trim() ? '' : message);`;
 
 const blurBroken = `    if (target.name !== 'text' && target.name !== 'scene') return;
     const slot = panel.querySelector<HTMLElement>(\`[data-error-for="\${target.name}"]\`);
     if (!slot) return;
-    slot.textContent =
-      target.value.trim() === ''
-        ? target.name === 'text'
-          ? '本文を書いてください'
-          : 'シーンを書いてください'
-        : '';`;
+    const message =
+      target.name === 'text' ? '本文を書いてください' : 'シーンを書いてください';
+    paintFieldError(slot, target.value.trim() ? '' : message);`;
 
 function runTests() {
   const result = spawnSync(

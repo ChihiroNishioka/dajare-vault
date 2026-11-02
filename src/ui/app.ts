@@ -11,13 +11,8 @@ import {
   type ImportDecisions,
   type ImportPlan,
 } from '../domain/transfer';
-import {
-  codePointLength,
-  LIMITS,
-  READING_RE,
-  REQUIRED_FIELDS,
-  requiredEmptyMessage,
-} from '../domain/validate';
+import { codePointLength, LIMITS, READING_RE } from '../domain/validate';
+import { currentRequiredFields, requiredEmptyMessage } from '../domain/required-fields';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import type { DajareStore } from '../store/dajare-store';
 import { adaptLocalStore } from '../store/local-dajare-store';
@@ -400,16 +395,23 @@ export function mount(
     if (speakers) speakers.innerHTML = chipHtml('draft-speakers', ui.draftSpeakers);
   };
 
+  const paintFieldError = (slot: HTMLElement, message: string): void => {
+    slot.textContent = message;
+    const field = slot.dataset.errorFor;
+    const input = field ? panel.querySelector<HTMLElement>(`[name="${field}"]`) : null;
+    if (input) input.setAttribute('aria-invalid', message ? 'true' : 'false');
+  };
+
   const showFormErrors = (errors: { field: string; message: string }[]): void => {
     panel.querySelectorAll<HTMLElement>('[data-error-for]').forEach((node) => {
-      node.textContent = '';
+      paintFieldError(node, '');
     });
     for (const error of errors) {
       const slot = panel.querySelector<HTMLElement>(`[data-error-for="${error.field}"]`);
-      if (slot) slot.textContent = error.message;
+      if (slot) paintFieldError(slot, error.message);
       else {
         const formSlot = panel.querySelector<HTMLElement>('[data-error-for="form"]');
-        if (formSlot) formSlot.textContent = error.message;
+        if (formSlot) paintFieldError(formSlot, error.message);
       }
     }
   };
@@ -442,7 +444,7 @@ export function mount(
     const save = panel.querySelector<HTMLButtonElement>('[data-action="save"]');
     if (!form || !save) return;
     const data = new FormData(form);
-    save.disabled = REQUIRED_FIELDS.some(
+    save.disabled = currentRequiredFields().some(
       (item) => String(data.get(item.field) ?? '').trim().length === 0,
     );
     updateCounters(form);
@@ -618,10 +620,9 @@ export function mount(
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
     if (!target.closest('#dajare-form')) return;
     const message = requiredEmptyMessage(target.name);
-    if (!message) return;
     const slot = panel.querySelector<HTMLElement>(`[data-error-for="${target.name}"]`);
-    if (!slot) return;
-    slot.textContent = target.value.trim() ? '' : message;
+    if (!message || !slot) return;
+    paintFieldError(slot, target.value.trim() ? '' : message);
   });
 
   const blockText = (block: BackupBlock): string => {

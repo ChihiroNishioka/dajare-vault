@@ -30,7 +30,7 @@ npm run test:e2e  # Playwright（PC 1280 と iPhone 13）
 npm run screenshots
 ```
 
-スクリーンショットは `screenshots/` に出します（コミットしません）。名前は `list_pc_1280.png` のように `{画面}_{pc|iphone}_{幅}.png` です。
+スクリーンショットは `screenshots/` に出します（コミットしません）。名前は `list_pc_1280.png` のように `{画面}_{pc|iphone}_{幅}.png` です。必須の印の e2e は `SCREENSHOT_DIR` があればそのディレクトリへ保存し、無ければ `screenshots/` です。保存に失敗すると、そのテストも失敗します。
 
 ## 項目
 
