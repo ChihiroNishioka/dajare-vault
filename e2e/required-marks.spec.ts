@@ -3,31 +3,20 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const optional = ['reading', 'source', 'memo', 'addedAt', 'addedAtNote'] as const;
 
-function shotDirs(): string[] {
-  const dirs: string[] = [];
-  for (const dir of ['/opt/cursor/artifacts/screenshots', 'screenshots']) {
-    try {
-      mkdirSync(dir, { recursive: true });
-      dirs.push(dir);
-    } catch {
-      // この環境に書けない場所は飛ばす。
-    }
-  }
-  return dirs;
+function shotDir(): string {
+  const dir = process.env.SCREENSHOT_DIR ?? 'screenshots';
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
-async function shot(page: Page, name: string): Promise<void> {
+async function shot(page: Page, name: string, fullPage = false): Promise<void> {
   const width = page.viewportSize()?.width ?? 0;
   const device = width <= 500 ? 'iphone-390' : 'pc-1280';
-  await Promise.all(
-    shotDirs().map((dir) =>
-      page.screenshot({
-        path: `${dir}/required_${name}_${device}.png`,
-        animations: 'disabled',
-        fullPage: true,
-      }),
-    ),
-  );
+  await page.screenshot({
+    path: `${shotDir()}/required_${name}_${device}.png`,
+    animations: 'disabled',
+    fullPage,
+  });
 }
 
 async function openEditor(page: Page): Promise<void> {
@@ -75,33 +64,38 @@ async function sameLine(label: Locator): Promise<boolean> {
 
 async function expectRequiredForm(page: Page, dialog: Locator, shotName: string): Promise<void> {
   await expect(dialog.getByText('＊は必須', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('img', { name: '必須' })).toHaveCount(2);
-  for (const name of ['text', 'scene'] as const) {
+  await expect(dialog.getByRole('img', { name: '必須' })).toHaveCount(0);
+  const requiredNames = await dialog
+    .locator('[aria-required="true"]')
+    .evaluateAll((nodes) => nodes.map((node) => (node as HTMLInputElement).name));
+  expect(requiredNames.length).toBeGreaterThan(0);
+  for (const name of requiredNames) {
     const label = labelFor(dialog, name);
-    await expect(label.getByRole('img', { name: '必須' })).toBeVisible();
-    await expect(dialog.locator(`[name="${name}"]`)).toHaveAttribute('aria-required', 'true');
+    const star = label.locator('.req');
+    const input = dialog.locator(`[name="${name}"]`);
+    await expect(star).toHaveText('＊');
+    await expect(star).toHaveAttribute('aria-hidden', 'true');
+    await expect(input).toHaveAttribute('aria-required', 'true');
+    await expect(input).not.toHaveAccessibleName(/必須/);
     expect(await sameLine(label)).toBe(true);
-    const color = await label.locator('.req').evaluate((node) => getComputedStyle(node).color);
+    const color = await star.evaluate((node) => getComputedStyle(node).color);
     const [red, green, blue] = color.match(/\d+/g)?.map(Number) ?? [];
     expect(red ?? 0).toBeGreaterThan((green ?? 0) + 40);
     expect(red ?? 0).toBeGreaterThan((blue ?? 0) + 40);
   }
   for (const name of optional) {
-    await expect(labelFor(dialog, name).getByRole('img', { name: '必須' })).toHaveCount(0);
+    await expect(labelFor(dialog, name).locator('.req')).toHaveCount(0);
     await expect(dialog.locator(`[name="${name}"]`)).not.toHaveAttribute('aria-required', 'true');
   }
-  await expect(
-    dialog.getByRole('group', { name: '言った人' }).getByRole('img', { name: '必須' }),
-  ).toHaveCount(0);
-  await expect(
-    dialog.getByRole('group', { name: 'タグ' }).getByRole('img', { name: '必須' }),
-  ).toHaveCount(0);
+  for (const legend of ['言った人', 'タグ']) {
+    await expect(dialog.getByRole('group', { name: legend }).locator('.req')).toHaveCount(0);
+  }
 
   const legend = await dialog.getByText('＊は必須', { exact: true }).boundingBox();
   const text = await dialog.locator('textarea[name="text"]').boundingBox();
   expect(legend && text && legend.y < text.y).toBe(true);
 
-  await shot(page, shotName);
+  await shot(page, shotName, true);
 
   await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
   await dialog.locator('textarea[name="text"]').fill('   ');
@@ -143,12 +137,18 @@ test('signed-out visitors cannot open the add form', async ({ page }) => {
 
 test('a signed-in mock add form marks only the required fields', async ({ page }) => {
   await openEditor(page);
+  await expect(page.locator('.mode-badge')).toHaveText('共有');
+  await expect(page.locator('.account-name')).toHaveText('ちひろ');
+  await shot(page, 'mock-header');
   const dialog = await openAdd(page);
   await expectRequiredForm(page, dialog, 'mock');
 });
 
 test('local mode add form marks only the required fields', async ({ page }) => {
   await openLocal(page);
+  await expect(page.locator('.mode-badge')).toHaveText('この端末だけ');
+  await expect(page.locator('.account-name')).toHaveCount(0);
+  await shot(page, 'local-header');
   const dialog = await openAdd(page);
   await expectRequiredForm(page, dialog, 'local');
 });

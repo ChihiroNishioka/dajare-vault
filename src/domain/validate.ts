@@ -58,10 +58,18 @@ export function normalizeTags(tags: string[]): { tags: string[]; error: string |
 }
 
 /** 空では保存できない項目。入力チェックと必須の印は、この配列だけを見る。 */
-export const REQUIRED_FIELDS = ['text', 'scene'];
+export const REQUIRED_FIELDS = [
+  { field: 'text', label: '本文', emptyMessage: '本文を書いてください' },
+  { field: 'scene', label: 'シーン', emptyMessage: 'シーンを書いてください' },
+] as const;
 
-export function isRequiredField(field: string): boolean {
-  return REQUIRED_FIELDS.includes(field);
+export type RequiredField = (typeof REQUIRED_FIELDS)[number];
+
+export function requiredEmptyMessage(
+  field: string,
+  fields: readonly RequiredField[] = REQUIRED_FIELDS,
+): string | null {
+  return fields.find((item) => item.field === field)?.emptyMessage ?? null;
 }
 
 export function normalizeSpeakers(speakers: string[]): {
@@ -86,7 +94,10 @@ export function normalizeSpeakers(speakers: string[]): {
   return { speakers: out, error: null };
 }
 
-export function validateDraft(input: DajareDraft): ValidationResult {
+export function validateDraft(
+  input: DajareDraft,
+  fields: readonly RequiredField[] = REQUIRED_FIELDS,
+): ValidationResult {
   const errors: FieldError[] = [];
   const warnings: string[] = [];
   const text = input.text.trim();
@@ -97,14 +108,16 @@ export function validateDraft(input: DajareDraft): ValidationResult {
   const addedAtNote = input.addedAtNote.trim();
   const addedAt = input.addedAt === null ? null : input.addedAt.trim() || null;
 
-  if (isRequiredField('text') && !text) {
-    errors.push({ field: 'text', message: '本文を書いてください' });
+  const textRequired = requiredEmptyMessage('text', fields);
+  if (textRequired && !text) {
+    errors.push({ field: 'text', message: textRequired });
   } else if (text.length > LIMITS.text) {
     errors.push({ field: 'text', message: `本文は${LIMITS.text}文字以内にしてください` });
   }
 
-  if (isRequiredField('scene') && !scene) {
-    errors.push({ field: 'scene', message: 'シーンを書いてください' });
+  const sceneRequired = requiredEmptyMessage('scene', fields);
+  if (sceneRequired && !scene) {
+    errors.push({ field: 'scene', message: sceneRequired });
   } else if (scene.length > LIMITS.scene) {
     errors.push({ field: 'scene', message: `シーンは${LIMITS.scene}文字以内にしてください` });
   }

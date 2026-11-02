@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { endSave, tryBeginSave } from '../src/ui/save-lock';
 import { formPanel } from '../src/ui/panel';
@@ -15,8 +16,8 @@ describe('save lock', () => {
 
 describe('tag and speaker inputs', () => {
   it('allows a full row of emoji before the code-point check', () => {
-    const html = formPanel('add', null, [], []);
-    expect(html).toContain('id="tag-draft" maxlength="40"');
-    expect(html).toContain('id="speaker-draft" maxlength="60"');
+    document.body.innerHTML = formPanel('add', null, [], []);
+    expect(document.querySelector('#tag-draft')?.getAttribute('maxlength')).toBe('40');
+    expect(document.querySelector('#speaker-draft')?.getAttribute('maxlength')).toBe('60');
   });
 });

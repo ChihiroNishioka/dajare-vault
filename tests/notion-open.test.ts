@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { runNotionBackup } from '../src/notion/client';
 import { notionPanel } from '../src/ui/panel';
@@ -19,6 +20,16 @@ const entry = (id: string): NotionDajare => ({
   updatedAt: '2026-10-02T00:00:00.000Z',
 });
 
+function panel(html: string): HTMLElement {
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  return root;
+}
+
+function startButton(root: ParentNode): HTMLButtonElement | null {
+  return root.querySelector('[data-action="notion-backup"]');
+}
+
 describe('notion open panel', () => {
   it('S24 a blocked list can be explained while start stays disabled', () => {
     expect(
@@ -28,26 +39,33 @@ describe('notion open panel', () => {
       backupBlockReason({ mode: 'cloud', serverReady: true, readError: '読めない', count: 4 }),
     ).toBe('error');
     const reason = '共有の紙を読み終えてから保管します';
-    const loading = notionPanel('idle', reason, { allowStart: false });
-    expect(loading).toContain('はじめる');
-    expect(loading).toContain('disabled');
-    const sameWords = notionPanel('idle', reason);
-    expect(sameWords).toContain(reason);
-    expect(sameWords).not.toContain('disabled');
-    const failed = notionPanel('idle', '共有の紙を読めないので保管しません', { allowStart: false });
-    expect(failed).toContain('disabled');
-    const running = notionPanel('running', '送っています… 0/10');
-    expect(running).toContain('はじめる');
-    expect(running).toContain('disabled');
-    const retry = notionPanel('done', 'Notionへの保管が途中で止まりました。混んでいます', {
-      failure: true,
-    });
-    expect(retry).toContain('はじめる');
-    expect(retry).not.toContain('disabled');
-    const missing = notionPanel('done', 'Notion保管のリレーが未設定です', { failure: true });
-    expect(missing).toContain('はじめる');
-    const success = notionPanel('done', '最終保管 2026-11-01');
-    expect(success).not.toContain('はじめる');
+    const loading = panel(notionPanel('idle', reason, { allowStart: false }));
+    expect(startButton(loading)?.textContent).toBe('はじめる');
+    expect(startButton(loading)?.disabled).toBe(true);
+    expect(loading.querySelector('[data-notion-status]')?.textContent).toBe(reason);
+    const sameWords = panel(notionPanel('idle', reason));
+    expect(sameWords.querySelector('[data-notion-status]')?.textContent).toBe(reason);
+    expect(startButton(sameWords)?.disabled).toBe(false);
+    const failed = panel(
+      notionPanel('idle', '共有の紙を読めないので保管しません', { allowStart: false }),
+    );
+    expect(startButton(failed)?.disabled).toBe(true);
+    const running = panel(notionPanel('running', '送っています… 0/10'));
+    expect(startButton(running)?.textContent).toBe('はじめる');
+    expect(startButton(running)?.disabled).toBe(true);
+    expect(running.querySelector('[data-notion-status]')?.textContent).toBe('送っています… 0/10');
+    const retry = panel(
+      notionPanel('done', 'Notionへの保管が途中で止まりました。混んでいます', {
+        failure: true,
+      }),
+    );
+    expect(startButton(retry)?.textContent).toBe('はじめる');
+    expect(startButton(retry)?.disabled).toBe(false);
+    const missing = panel(notionPanel('done', 'Notion保管のリレーが未設定です', { failure: true }));
+    expect(startButton(missing)?.textContent).toBe('はじめる');
+    const success = panel(notionPanel('done', '最終保管 2026-11-01'));
+    expect(startButton(success)).toBeNull();
+    expect(success.textContent).not.toContain('はじめる');
   });
 
   it('S25 archive confirmation follows the cap', () => {

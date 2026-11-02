@@ -41,35 +41,30 @@ it('marks exactly the fields that the check rejects when they are empty', () => 
   expect(document.querySelector('input[name="reading"]')?.hasAttribute('aria-required')).toBe(
     false,
   );
-  expect(
-    document
-      .querySelector('textarea[name="text"]')
-      ?.closest('label')
-      ?.querySelector('.req')
-      ?.getAttribute('aria-label'),
-  ).toBe('必須');
+  const star = document
+    .querySelector('textarea[name="text"]')
+    ?.closest('label')
+    ?.querySelector('.req');
+  expect(star?.getAttribute('aria-hidden')).toBe('true');
+  expect(star?.hasAttribute('aria-label')).toBe(false);
 });
 
-it('drops the mark and the empty check together when a field leaves the list', () => {
-  const index = REQUIRED_FIELDS.indexOf('scene');
-  expect(index).toBeGreaterThanOrEqual(0);
-  const removed = REQUIRED_FIELDS.splice(index, 1);
-  try {
-    document.body.innerHTML = formPanel('add', null, [], []);
-    expect(
-      document.querySelector('input[name="scene"]')?.closest('label')?.querySelector('.req'),
-    ).toBeNull();
-    expect(document.querySelector('textarea[name="text"]')?.getAttribute('aria-required')).toBe(
-      'true',
-    );
-    expect(document.querySelector('input[name="scene"]')?.hasAttribute('aria-required')).toBe(
-      false,
-    );
-    const result = validateDraft({ ...blank(), text: 'ある' });
-    expect(result.errors.some((error) => error.field === 'scene')).toBe(false);
-    expect(result.ok).toBe(true);
-    expect(validateDraft(blank()).errors.map((error) => error.field)).toEqual(['text']);
-  } finally {
-    REQUIRED_FIELDS.splice(index, 0, ...removed);
-  }
-});
+it.each(['text', 'scene'] as const)(
+  'drops %s from the mark and the empty check together without editing the list',
+  (field) => {
+    const fields = REQUIRED_FIELDS.filter((item) => item.field !== field);
+    const other = field === 'text' ? 'scene' : 'text';
+    document.body.innerHTML = formPanel('add', null, [], [], fields);
+    const dropped = document.querySelector(`[name="${field}"]`);
+    expect(dropped?.closest('label')?.querySelector('.req')).toBeNull();
+    expect(dropped?.hasAttribute('aria-required')).toBe(false);
+    expect(document.querySelector(`[name="${other}"]`)?.getAttribute('aria-required')).toBe('true');
+    const kept = validateDraft({ ...blank(), [other]: ' ' }, fields);
+    expect(kept.ok).toBe(false);
+    expect(kept.errors.map((error) => error.field)).toEqual([other]);
+    const released = validateDraft({ ...blank(), [other]: 'ある' }, fields);
+    expect(released.errors.some((error) => error.field === field)).toBe(false);
+    expect(released.ok).toBe(true);
+    expect(REQUIRED_FIELDS.map((item) => item.field)).toEqual(['text', 'scene']);
+  },
+);
