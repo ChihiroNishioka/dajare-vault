@@ -71,7 +71,7 @@ async function expectHeaderLayout(page: Page): Promise<void> {
     expect(noHorizontalOverlap(actions)).toBe(true);
   }
 
-  const login = await boxes(page, '.gsi-slot, .account-alt, .mast-actions button');
+  const login = await boxes(page, '.gsi-slot, .mast-actions button');
   const loginRows: Box[][] = [];
   for (const item of login) {
     const row = loginRows.find((group) => group.some((other) => overlaps(other, item)));
@@ -93,7 +93,7 @@ async function expectHeaderLayout(page: Page): Promise<void> {
 
   const controls = await boxes(
     page,
-    '.mode-badge, .account-name, .account-logout, .gsi-slot, .account-alt, .mast-actions button',
+    '.mode-badge, .account-name, .account-logout, .gsi-slot, .mast-actions button',
   );
   expect(controls.length).toBeGreaterThan(0);
   const rows: Box[][] = [];
@@ -121,9 +121,16 @@ async function shot(page: Page, name: string): Promise<void> {
   });
 }
 
+test('signed-out offers only the Google placeholder', async ({ page }) => {
+  await openMock(page, 'signed-out');
+  await expect(page.locator('.gsi-placeholder')).toBeVisible();
+  await expect(page.locator('.account-alt')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '別の方法でログイン' })).toHaveCount(0);
+  await expect(page.locator('.login-row button')).toHaveCount(0);
+});
+
 test('signed-out header lines up', async ({ page }) => {
   await openMock(page, 'signed-out');
-  await expect(page.getByRole('button', { name: '別の方法でログイン' })).toBeVisible();
   await expect(page.locator('.gsi-placeholder')).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
@@ -135,6 +142,7 @@ test('signed-out header lines up', async ({ page }) => {
 test('signed-in editor header lines up', async ({ page }) => {
   await openMock(page, 'editor');
   await expect(page.locator('.mode-badge')).toHaveText('共有');
+  await expect(page.locator('.account-alt')).toHaveCount(0);
   await expect(page.locator('.account-name')).toHaveText('ちひろ');
   await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeVisible();
@@ -147,6 +155,7 @@ test('signed-in editor header lines up', async ({ page }) => {
 test('signed-in read-only header lines up', async ({ page }) => {
   await openMock(page, 'viewer');
   await expect(page.locator('.mode-badge')).toHaveText('見るだけ');
+  await expect(page.locator('.account-alt')).toHaveCount(0);
   await expect(page.locator('.account-name')).toHaveText('ちひろ');
   await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
   await expect(page.getByRole('button', { name: '追加' })).toBeHidden();
@@ -154,6 +163,28 @@ test('signed-in read-only header lines up', async ({ page }) => {
   await expect(page.getByRole('button', { name: '保管', exact: true })).toBeVisible();
   await expectHeaderLayout(page);
   await shot(page, 'viewer');
+});
+
+test('logout hides the archive actions', async ({ page }) => {
+  await openMock(page, 'editor');
+  await page.getByRole('button', { name: 'ログアウト' }).click();
+  await expect(page.getByRole('button', { name: '保管', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Notionに保管' })).toBeHidden();
+});
+
+test('local mode stays on this device and does not call Google', async ({ page }) => {
+  const urls: string[] = [];
+  page.on('request', (request) => urls.push(request.url()));
+  await page.goto('/dajare-vault/');
+  await page.evaluate(() => localStorage.clear());
+  await page.goto('/dajare-vault/');
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page.locator('dajare-card').first()).toBeVisible();
+  await expect(page.locator('.mode-badge')).toHaveText('この端末だけ');
+  await expect(page.locator('#gsi-button')).toHaveCount(0);
+  expect(urls.join('\n')).not.toMatch(
+    /accounts\.google\.com|identitytoolkit|firestore\.googleapis/,
+  );
 });
 
 test('a long name stays on the account line', async ({ page }) => {

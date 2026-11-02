@@ -1,17 +1,13 @@
 /** ログイン失敗を、画面に出す日本語にする。 */
 export function loginFailureMessage(code: string): string {
   switch (code) {
-    case 'auth/popup-closed-by-user':
-    case 'auth/cancelled-popup-request':
     case 'gsi-closed':
       return 'ログイン画面を閉じました';
-    case 'auth/popup-blocked':
-      return 'ログイン画面が開けませんでした。もう一度タップしてください';
     case 'auth/unauthorized-domain':
     case 'gsi-origin':
       return 'このページのアドレスが、ログインの許可リストに入っていません';
     case 'gsi-load':
-      return 'Googleのログインボタンを読み込めませんでした。別の方法でログインしてください';
+      return 'Googleのログインボタンを読み込めませんでした。通信を確かめて、ページを読み込み直してください';
     case 'not-editor':
       return 'このアカウントは編集者の名簿に無いので、見るだけです';
     default:

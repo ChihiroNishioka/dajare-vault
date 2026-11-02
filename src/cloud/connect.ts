@@ -4,7 +4,6 @@ import {
   GoogleAuthProvider,
   onAuthStateChanged,
   signInWithCredential,
-  signInWithPopup,
   signOut as firebaseSignOut,
   type User,
 } from 'firebase/auth';
@@ -34,8 +33,6 @@ export interface CloudSession {
 export interface CloudConnection {
   store: DajareStore;
   subscribe(listener: (session: CloudSession) => void): () => void;
-  /** 予備。クリックの中から、await より前に呼ぶ。 */
-  signIn(): Promise<void>;
   /** Google Identity Services のボタンを描く。読み込めなければ onStatus('gsi-load' など)。 */
   renderGoogleButton(container: HTMLElement, onStatus: (code: string) => void): void;
   signOut(): Promise<void>;
@@ -59,8 +56,6 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
   const auth = getAuth(app);
   const googleButton = loadGoogleIdentity().catch(() => null);
   const db = openFirestore(app);
-  const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: 'select_account' });
 
   let session: CloudSession = { user: null, emailVerified: false, isEditor: false, ready: false };
   const listeners = new Set<(next: CloudSession) => void>();
@@ -108,9 +103,6 @@ async function openCloud(config: FirebaseWebConfig): Promise<CloudConnection> {
       listeners.add(listener);
       listener(session);
       return () => listeners.delete(listener);
-    },
-    signIn() {
-      return signInWithPopup(auth, provider).then(() => undefined);
     },
     renderGoogleButton(container, onStatus) {
       watchGoogleOriginError(() => onStatus('gsi-origin'));

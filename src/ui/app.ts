@@ -110,7 +110,6 @@ export function mount(
     return gate.mode === 'local' || gate.isEditor;
   };
   let cloudStore: DajareStore | null = null;
-  let cloudSignIn: (() => Promise<void>) | null = null;
   let renderGoogleButton:
     ((container: HTMLElement, onStatus: (code: string) => void) => void) | null = null;
   let cloudSignOut: (() => Promise<void>) | null = null;
@@ -956,21 +955,6 @@ export function mount(
       panel.querySelector<HTMLInputElement>('#import-file')?.click();
       return;
     }
-    if (action === 'sign-in') {
-      if (!cloudSignIn) {
-        showToast('共有の準備ができていません');
-        return;
-      }
-      void cloudSignIn().catch((error: unknown) => {
-        const code =
-          error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
-        const message = loginFailureMessage(code);
-        const note = root.querySelector('#login-note');
-        if (note) note.textContent = message;
-        showToast(message);
-      });
-      return;
-    }
     if (action === 'sign-out') {
       if (headerChrome && !cloudSignOut) {
         dismissMockSignIn = true;
@@ -1302,7 +1286,6 @@ export function mount(
       .then(({ connectCloud }) => connectCloud())
       .then((cloud) => {
         cloudStore = cloud.store;
-        cloudSignIn = () => cloud.signIn();
         renderGoogleButton = (container, onStatus) => cloud.renderGoogleButton(container, onStatus);
         syncAccount();
         cloudSignOut = () => cloud.signOut();
@@ -1424,7 +1407,7 @@ function updateCounters(form: HTMLFormElement): void {
 
 function signedOutHtml(placeholder: boolean): string {
   const face = placeholder ? '<span class="gsi-placeholder">Google でログイン</span>' : '';
-  return `<div class="login-row"><div id="gsi-button" class="gsi-slot">${face}</div><button type="button" class="quiet account-alt" data-action="sign-in">別の方法でログイン</button></div><p class="login-note" id="login-note"></p>`;
+  return `<div class="login-row"><div id="gsi-button" class="gsi-slot">${face}</div></div><p class="login-note" id="login-note"></p>`;
 }
 
 function signedInHtml(name: string, editor: boolean): string {

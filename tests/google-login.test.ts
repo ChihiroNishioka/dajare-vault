@@ -9,8 +9,7 @@ import {
 } from '../src/cloud/google-identity';
 
 describe('login messages', () => {
-  it('explains a closed popup, a blocked origin, and a viewer account', () => {
-    expect(loginFailureMessage('auth/popup-closed-by-user')).toBe('ログイン画面を閉じました');
+  it('explains a closed button, a blocked origin, and a viewer account', () => {
     expect(loginFailureMessage('gsi-closed')).toBe('ログイン画面を閉じました');
     expect(loginFailureMessage('auth/unauthorized-domain')).toBe(
       'このページのアドレスが、ログインの許可リストに入っていません',
@@ -18,7 +17,10 @@ describe('login messages', () => {
     expect(loginFailureMessage('gsi-origin')).toBe(
       'このページのアドレスが、ログインの許可リストに入っていません',
     );
-    expect(loginFailureMessage('gsi-load')).toMatch(/別の方法でログイン/);
+    expect(loginFailureMessage('gsi-load')).toBe(
+      'Googleのログインボタンを読み込めませんでした。通信を確かめて、ページを読み込み直してください',
+    );
+    expect(loginFailureMessage('gsi-load')).not.toMatch(/別の方法/);
     expect(loginFailureMessage('not-editor')).toMatch(/見るだけ/);
   });
 
