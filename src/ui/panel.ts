@@ -1,6 +1,7 @@
 import { localDateString } from '../domain/ids';
 import type { ImportPlan } from '../domain/transfer';
-import { LIMITS, REQUIRED_FIELDS, type RequiredField } from '../domain/validate';
+import { LIMITS } from '../domain/validate';
+import { currentRequiredFields, formLabel, type RequiredName } from '../domain/required-fields';
 import type { Dajare } from '../types';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
@@ -14,11 +15,17 @@ function fieldName(label: string, required: boolean): string {
   return `<span class="field-name">${label}${mark}</span>`;
 }
 
-function requiredItem(
-  field: string,
-  required: readonly RequiredField[],
-): RequiredField | undefined {
-  return required.find((item) => item.field === field);
+function named(field: RequiredName): string {
+  const item = currentRequiredFields().find((row) => row.field === field);
+  return fieldName(item?.label ?? formLabel(field), Boolean(item));
+}
+
+function requiredAttr(field: RequiredName): string {
+  return currentRequiredFields().some((row) => row.field === field) ? ' aria-required="true"' : '';
+}
+
+function fieldError(field: string): string {
+  return `<p class="field-error" data-error-for="${field}" aria-live="polite"></p>`;
 }
 
 function chips(id: string, values: string[]): string {
@@ -45,7 +52,6 @@ export function formPanel(
   item: Dajare | null,
   tags: string[],
   speakers: string[],
-  required: readonly RequiredField[] = REQUIRED_FIELDS,
 ): string {
   const today = localDateString(new Date());
   const added = item?.addedAt ?? today;
@@ -59,14 +65,14 @@ export function formPanel(
       </header>
       <form class="entry" id="dajare-form" novalidate>
         <p class="req-legend">＊は必須</p>
-        <label>${fieldName(requiredItem('text', required)?.label ?? '本文', Boolean(requiredItem('text', required)))} ${counter('text', LIMITS.text)}
-          <textarea name="text" maxlength="${LIMITS.text}" rows="3"${requiredItem('text', required) ? ' aria-required="true"' : ''}>${escapeHtml(item?.text ?? '')}</textarea>
+        <label>${named('text')} ${counter('text', LIMITS.text)}
+          <textarea name="text" maxlength="${LIMITS.text}" rows="3"${requiredAttr('text')}>${escapeHtml(item?.text ?? '')}</textarea>
         </label>
-        <p class="field-error" data-error-for="text"></p>
-        <label>${fieldName(requiredItem('scene', required)?.label ?? 'シーン', Boolean(requiredItem('scene', required)))} ${counter('scene', LIMITS.scene)}
-          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}"${requiredItem('scene', required) ? ' aria-required="true"' : ''} />
+        ${fieldError('text')}
+        <label>${named('scene')} ${counter('scene', LIMITS.scene)}
+          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}"${requiredAttr('scene')} />
         </label>
-        <p class="field-error" data-error-for="scene"></p>
+        ${fieldError('scene')}
         <button type="button" class="quiet" data-action="scene-unknown">分からなければ「不明」</button>
         <div class="date-row">
           <label>追加日
@@ -77,7 +83,7 @@ export function formPanel(
         <label>日付メモ ${counter('addedAtNote', LIMITS.addedAtNote)}
           <input name="addedAtNote" maxlength="${LIMITS.addedAtNote}" value="${escapeHtml(item?.addedAtNote ?? '')}" placeholder="年が分からないときなど" />
         </label>
-        <p class="field-error" data-error-for="addedAt"></p>
+        ${fieldError('addedAt')}
         <label>読み ${counter('reading', LIMITS.reading)}
           <input name="reading" maxlength="${LIMITS.reading}" value="${escapeHtml(item?.reading ?? '')}" placeholder="ひらがな" />
         </label>
@@ -91,7 +97,7 @@ export function formPanel(
           <input id="speaker-draft" maxlength="${LIMITS.speaker * 2}" placeholder="名前を書いて Enter" />
           ${suggestions('speaker', SUGGESTED_SPEAKERS)}
         </fieldset>
-        <p class="field-error" data-error-for="speakers"></p>
+        ${fieldError('speakers')}
         <div class="rate-row">
           <span>評価</span>
           <star-rating ${item?.rating ? `value="${item.rating}"` : ''}></star-rating>
@@ -103,11 +109,11 @@ export function formPanel(
           <input id="tag-draft" maxlength="${LIMITS.tag * 2}" placeholder="タグを書いて Enter" />
           ${suggestions('tag', SUGGESTED_TAGS)}
         </fieldset>
-        <p class="field-error" data-error-for="tags"></p>
+        ${fieldError('tags')}
         <label>メモ ${counter('memo', LIMITS.memo)}
           <textarea name="memo" maxlength="${LIMITS.memo}" rows="3">${escapeHtml(item?.memo ?? '')}</textarea>
         </label>
-        <p class="field-error" data-error-for="form"></p>
+        ${fieldError('form')}
         <div class="sheet-actions">
           <button type="button" class="primary" data-action="save" disabled>保存</button>
           ${

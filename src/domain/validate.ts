@@ -1,5 +1,7 @@
 import type { DajareDraft, Rating } from '../types';
 import { isIsoDate } from './ids';
+import { currentRequiredFields } from './required-fields';
+export { REQUIRED_FIELDS, requiredEmptyMessage, type RequiredField } from './required-fields';
 
 export const LIMITS = {
   text: 200,
@@ -57,21 +59,6 @@ export function normalizeTags(tags: string[]): { tags: string[]; error: string |
   return { tags: out, error: null };
 }
 
-/** 空では保存できない項目。入力チェックと必須の印は、この配列だけを見る。 */
-export const REQUIRED_FIELDS = [
-  { field: 'text', label: '本文', emptyMessage: '本文を書いてください' },
-  { field: 'scene', label: 'シーン', emptyMessage: 'シーンを書いてください' },
-] as const;
-
-export type RequiredField = (typeof REQUIRED_FIELDS)[number];
-
-export function requiredEmptyMessage(
-  field: string,
-  fields: readonly RequiredField[] = REQUIRED_FIELDS,
-): string | null {
-  return fields.find((item) => item.field === field)?.emptyMessage ?? null;
-}
-
 export function normalizeSpeakers(speakers: string[]): {
   speakers: string[];
   error: string | null;
@@ -94,10 +81,7 @@ export function normalizeSpeakers(speakers: string[]): {
   return { speakers: out, error: null };
 }
 
-export function validateDraft(
-  input: DajareDraft,
-  fields: readonly RequiredField[] = REQUIRED_FIELDS,
-): ValidationResult {
+export function validateDraft(input: DajareDraft): ValidationResult {
   const errors: FieldError[] = [];
   const warnings: string[] = [];
   const text = input.text.trim();
@@ -108,18 +92,20 @@ export function validateDraft(
   const addedAtNote = input.addedAtNote.trim();
   const addedAt = input.addedAt === null ? null : input.addedAt.trim() || null;
 
-  const textRequired = requiredEmptyMessage('text', fields);
-  if (textRequired && !text) {
-    errors.push({ field: 'text', message: textRequired });
-  } else if (text.length > LIMITS.text) {
-    errors.push({ field: 'text', message: `本文は${LIMITS.text}文字以内にしてください` });
-  }
-
-  const sceneRequired = requiredEmptyMessage('scene', fields);
-  if (sceneRequired && !scene) {
-    errors.push({ field: 'scene', message: sceneRequired });
-  } else if (scene.length > LIMITS.scene) {
-    errors.push({ field: 'scene', message: `シーンは${LIMITS.scene}文字以内にしてください` });
+  const trimmed: Record<string, string> = { text, scene };
+  for (const item of currentRequiredFields()) {
+    const value = trimmed[item.field] ?? '';
+    if (!value) {
+      errors.push({ field: item.field, message: item.emptyMessage });
+      continue;
+    }
+    const max = LIMITS[item.field];
+    if (value.length > max) {
+      errors.push({
+        field: item.field,
+        message: `${item.label}は${max}文字以内にしてください`,
+      });
+    }
   }
 
   if (reading.length > LIMITS.reading) {

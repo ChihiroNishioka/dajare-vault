@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run --exclude tests/**/*.emulator.test.ts",
+    "test:mutations": "node scripts/required-mutations.mjs",
     "test:rules": "firebase emulators:exec --only firestore --project demo-dajare \"vitest run --maxWorkers=1 tests/rules.emulator.test.ts tests/notion-ready.emulator.test.ts\"",
     "test:e2e": "playwright test --project=pc-chromium --project=iphone-webkit",
     "screenshots": "playwright test --project=screenshots-pc --project=screenshots-iphone",

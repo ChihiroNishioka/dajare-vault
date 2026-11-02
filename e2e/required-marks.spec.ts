@@ -21,8 +21,6 @@ async function shot(page: Page, name: string, fullPage = false): Promise<void> {
 
 async function openEditor(page: Page): Promise<void> {
   await page.goto('/dajare-vault/?mock=editor');
-  await page.evaluate(() => localStorage.clear());
-  await page.goto('/dajare-vault/?mock=editor');
   await page.evaluate(() => document.fonts.ready);
   await expect(page.locator('dajare-card').first()).toBeVisible();
   await expect(page.locator('.account-name')).toHaveText('ちひろ');
@@ -76,6 +74,10 @@ async function expectRequiredForm(page: Page, dialog: Locator, shotName: string)
     await expect(star).toHaveText('＊');
     await expect(star).toHaveAttribute('aria-hidden', 'true');
     await expect(input).toHaveAttribute('aria-required', 'true');
+    await expect(dialog.locator(`[data-error-for="${name}"]`)).toHaveAttribute(
+      'aria-live',
+      'polite',
+    );
     await expect(input).not.toHaveAccessibleName(/必須/);
     expect(await sameLine(label)).toBe(true);
     const color = await star.evaluate((node) => getComputedStyle(node).color);
@@ -128,8 +130,6 @@ async function expectEachRequiredFieldBlocksSave(dialog: Locator): Promise<void>
 
 test('signed-out visitors cannot open the add form', async ({ page }) => {
   await page.goto('/dajare-vault/?mock=signed-out');
-  await page.evaluate(() => localStorage.clear());
-  await page.goto('/dajare-vault/?mock=signed-out');
   await expect(page.locator('dajare-card').first()).toBeVisible();
   await expect(page.locator('.masthead').getByRole('button', { name: '追加' })).toBeHidden();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -142,6 +142,18 @@ test('a signed-in mock add form marks only the required fields', async ({ page }
   await shot(page, 'mock-header');
   const dialog = await openAdd(page);
   await expectRequiredForm(page, dialog, 'mock');
+});
+
+test('the edit form marks the same required fields', async ({ page }) => {
+  await openLocal(page);
+  await page.locator('dajare-card').first().getByRole('button', { name: '編集' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: '書き直す' })).toBeVisible();
+  await expect(dialog.getByText('＊は必須', { exact: true })).toBeVisible();
+  await expect(dialog.locator('[aria-required="true"]')).toHaveCount(2);
+  await expect(dialog.locator('textarea[name="text"]')).toHaveAttribute('aria-required', 'true');
+  await expect(dialog.locator('input[name="scene"]')).toHaveAttribute('aria-required', 'true');
+  await expect(dialog.locator('[data-error-for="text"]')).toHaveAttribute('aria-live', 'polite');
 });
 
 test('local mode add form marks only the required fields', async ({ page }) => {
