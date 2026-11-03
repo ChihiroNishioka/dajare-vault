@@ -10,3 +10,4 @@ screenshots
 firebase-debug.log
 firestore-debug.log
 .firebase
+.mutation-backup.json

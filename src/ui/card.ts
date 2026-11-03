@@ -1,9 +1,8 @@
 import { hashId } from '../domain/ids';
-import { FORM_FIELDS } from '../domain/required-fields';
+import { formField } from '../domain/required-fields';
 import type { Dajare } from '../types';
 import { addedLabel, escapeHtml } from './html';
 
-const SCENE_LABEL = FORM_FIELDS.find((row) => row.field === 'scene')?.label ?? '';
 const TAPES = ['#f5d98b', '#a9d8c3', '#9fc9e0', '#f2a2a0'];
 const WASHES = ['#fffdf8', '#fbf6ec', '#f4f8f5', '#f8f3ef', '#f7f5f1'];
 
@@ -65,7 +64,7 @@ export class DajareCard extends HTMLElement {
           : '';
     const sceneHtml =
       item.scene && item.scene !== '不明'
-        ? `<p class="scene"><span>${escapeHtml(SCENE_LABEL)}</span> <em>${escapeHtml(item.scene)}</em></p>`
+        ? `<p class="scene"><span>${escapeHtml(formField('scene').label)}</span> <em>${escapeHtml(item.scene)}</em></p>`
         : '';
     const speakers =
       item.speakers.length > 0

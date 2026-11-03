@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { expect, it } from 'vitest';
 import { LIMITS, REQUIRED_FIELDS, validateDraft } from '../src/domain/validate';
-import { useRequiredFields } from '../src/domain/required-fields';
+import { FORM_FIELDS, useFormFields } from '../src/domain/required-fields';
 import { formPanel } from '../src/ui/panel';
 import { mount } from '../src/ui/app';
+import { defineCard, type DajareCard } from '../src/ui/card';
 import type { DajareDraft } from '../src/types';
 
 function blank(): DajareDraft {
@@ -83,8 +84,11 @@ it('marks an invalid required field and clears aria-invalid after it is fixed', 
 });
 
 it('enforces the length limit for a field removed from the required set', () => {
-  const fields = REQUIRED_FIELDS.filter((item) => item.field !== 'text');
-  useRequiredFields(fields, () => {
+  const fields = FORM_FIELDS.map((item) => ({
+    ...item,
+    required: item.field !== 'text' && item.required,
+  }));
+  useFormFields(fields, () => {
     const result = validateDraft({ ...blank(), text: 'あ'.repeat(LIMITS.text + 1), scene: '場面' });
     expect(result.ok).toBe(false);
     expect(result.errors).toContainEqual({
@@ -97,10 +101,13 @@ it('enforces the length limit for a field removed from the required set', () => 
 it.each(['text', 'scene'] as const)(
   'swapping the required entry drops %s from the mark, the save button, blur, and the save check',
   (field) => {
-    const fields = REQUIRED_FIELDS.filter((item) => item.field !== field);
+    const fields = FORM_FIELDS.map((item) => ({
+      ...item,
+      required: item.field === field ? false : item.required,
+    }));
     const other = field === 'text' ? 'scene' : 'text';
-    const keptMessage = fields.find((item) => item.field === other)?.emptyMessage ?? '';
-    useRequiredFields(fields, () => {
+    const keptMessage = other === 'text' ? '本文を書いてください' : 'シーンを書いてください';
+    useFormFields(fields, () => {
       window.history.replaceState(null, '', '/?mock=editor');
       const root = document.createElement('div');
       document.body.replaceChildren(root);
@@ -125,5 +132,69 @@ it.each(['text', 'scene'] as const)(
       ).toEqual([other]);
     });
     expect(REQUIRED_FIELDS.map((item) => item.field)).toEqual(['text', 'scene']);
+  },
+);
+
+it.each(['text', 'scene'] as const)(
+  'uses a replaced %s label, empty message and limit across the form, validation and card',
+  (field) => {
+    const replacementLabel = 'お題';
+    const replacementEmpty = 'お題がありません';
+    const replacementMax = 5;
+    const fields = FORM_FIELDS.map((item) =>
+      item.field === field
+        ? { ...item, label: replacementLabel, emptyMessage: replacementEmpty, max: replacementMax }
+        : item,
+    );
+
+    useFormFields(fields, () => {
+      window.history.replaceState(null, '', '/?mock=editor');
+      const root = document.createElement('div');
+      document.body.replaceChildren(root);
+      mount(root);
+      root.querySelector<HTMLButtonElement>('[data-action="add"]')?.click();
+
+      const input = root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="${field}"]`);
+      const label = input?.closest('label');
+      const name = label?.querySelector('.field-name')?.cloneNode(true) as HTMLElement | undefined;
+      name?.querySelector('.req')?.remove();
+      expect(name?.textContent).toBe(replacementLabel);
+      expect(input?.getAttribute('maxlength')).toBe(String(replacementMax));
+      expect(label?.querySelector(`[data-count-for="${field}"]`)?.textContent).toBe(
+        `残り ${replacementMax}`,
+      );
+
+      setField(root, field, '');
+      expect(root.querySelector(`[data-error-for="${field}"]`)?.textContent).toBe(replacementEmpty);
+
+      const other = field === 'text' ? 'scene' : 'text';
+      const validDraft = { ...blank(), text: '本文', scene: 'シーン', [other]: '有効' };
+      expect(validateDraft({ ...validDraft, [field]: ' ' }).errors).toEqual([
+        { field, message: replacementEmpty },
+      ]);
+      expect(validateDraft({ ...validDraft, [field]: 'あ'.repeat(replacementMax) }).ok).toBe(true);
+      expect(
+        validateDraft({ ...validDraft, [field]: 'あ'.repeat(replacementMax + 1) }).errors,
+      ).toEqual([
+        {
+          field,
+          message: `${replacementLabel}は${replacementMax}文字以内にしてください`,
+        },
+      ]);
+
+      defineCard();
+      const card = document.createElement('dajare-card') as DajareCard;
+      card.item = {
+        ...blank(),
+        text: 'カードの本文',
+        scene: '会議のあと',
+        id: `card-${field}`,
+        updatedAt: '2026-10-01T00:00:00.000Z',
+      };
+      document.body.replaceChildren(card);
+      expect(card.querySelector('.scene span')?.textContent).toBe(
+        field === 'scene' ? replacementLabel : 'シーン',
+      );
+    });
   },
 );
