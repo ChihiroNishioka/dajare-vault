@@ -79,6 +79,9 @@ async function expectRequiredForm(page: Page, dialog: Locator, shotName: string)
       'polite',
     );
     await expect(input).not.toHaveAccessibleName(/必須/);
+    const describedBy = (await input.getAttribute('aria-describedby')) ?? '';
+    expect(describedBy).not.toBe('');
+    await expect(dialog.locator(`[id="${describedBy}"]`)).toHaveAttribute('data-error-for', name);
     expect(await sameLine(label)).toBe(true);
     const color = await star.evaluate((node) => getComputedStyle(node).color);
     const [red, green, blue] = color.match(/\d+/g)?.map(Number) ?? [];
@@ -103,6 +106,9 @@ async function expectRequiredForm(page: Page, dialog: Locator, shotName: string)
   await dialog.locator('textarea[name="text"]').fill('   ');
   await dialog.locator('textarea[name="text"]').blur();
   await expect(dialog.getByText('本文を書いてください')).toBeVisible();
+  await expect(dialog.locator('textarea[name="text"]')).toHaveAccessibleDescription(
+    '本文を書いてください',
+  );
   await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
   await expect(dialog).toBeVisible();
   await expectEachRequiredFieldBlocksSave(dialog);
