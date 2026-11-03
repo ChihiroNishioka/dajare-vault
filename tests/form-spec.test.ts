@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 仕様の値（表示名・空欄の文言・上限）は定義から読まず、ここに文字で書く。
 // 定義を書き換えたら、ここが落ちることで仕様の変更に気づく。
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { validateDraft } from '../src/domain/validate';
 import { formPanel } from '../src/ui/panel';
 import { mount } from '../src/ui/app';
@@ -15,6 +15,7 @@ const SPEC = [
     max: 200,
     empty: '本文を書いてください',
     tooLong: '本文は200文字以内にしてください',
+    afterThree: '残り 197',
   },
   {
     field: 'scene',
@@ -22,6 +23,7 @@ const SPEC = [
     max: 100,
     empty: 'シーンを書いてください',
     tooLong: 'シーンは100文字以内にしてください',
+    afterThree: '残り 97',
   },
 ] as const;
 
@@ -98,6 +100,33 @@ describe.each(SPEC)('form spec for $field', (spec) => {
     expect(input?.getAttribute('aria-invalid')).toBe('true');
     setField(root, spec.field, 'あり');
     expect(described?.textContent).toBe('');
+  });
+
+  it('updates the counter on input and shows 上限です at the limit', () => {
+    const root = openAdd();
+    const counter = root.querySelector(`[data-count-for="${spec.field}"]`);
+    setField(root, spec.field, 'あいう');
+    expect(counter?.textContent).toBe(spec.afterThree);
+    setField(root, spec.field, 'あ'.repeat(spec.max));
+    expect(counter?.textContent).toBe('上限です');
+    setField(root, spec.field, 'あ'.repeat(spec.max - 1));
+    expect(counter?.textContent).toBe('残り 1');
+  });
+
+  it('marks the field invalid on save and clears it after the fix', async () => {
+    const root = openAdd();
+    setField(root, 'text', '保存の本文');
+    setField(root, 'scene', '保存のシーン');
+    setField(root, spec.field, 'あ'.repeat(spec.max + 1));
+    const input = root.querySelector<HTMLElement>(`[name="${spec.field}"]`);
+    const slot = root.querySelector(`[data-error-for="${spec.field}"]`);
+    expect(input?.getAttribute('aria-invalid')).toBe('false');
+    root.querySelector<HTMLButtonElement>('[data-action="save"]')?.click();
+    await vi.waitFor(() => expect(slot?.textContent).toBe(spec.tooLong));
+    expect(input?.getAttribute('aria-invalid')).toBe('true');
+    setField(root, spec.field, 'あり');
+    expect(slot?.textContent).toBe('');
+    expect(input?.getAttribute('aria-invalid')).toBe('false');
   });
 
   it('gives each error slot its own id', () => {

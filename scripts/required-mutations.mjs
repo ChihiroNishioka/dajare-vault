@@ -178,6 +178,78 @@ const mutations = [
       'uses a replaced scene label, empty message and limit across the form, validation and card',
     ],
   },
+  {
+    name: 'n 入力してもカウンタを更新しない',
+    file: 'src/ui/app.ts',
+    needle: '    const left = max - field.value.length;',
+    replacement: '    const left = max;',
+    catchers: [
+      "form spec for 'text' updates the counter on input and shows 上限です at the limit",
+      "form spec for 'scene' updates the counter on input and shows 上限です at the limit",
+    ],
+  },
+  {
+    name: 'o 上限で「上限です」を出さない',
+    file: 'src/ui/app.ts',
+    needle: "left === 0 ? '上限です' : `残り ${left}`",
+    replacement: "left === 0 ? '残り 0' : `残り ${left}`",
+    catchers: [
+      "form spec for 'text' updates the counter on input and shows 上限です at the limit",
+      "form spec for 'scene' updates the counter on input and shows 上限です at the limit",
+    ],
+  },
+  {
+    name: 'p 保存のエラーで aria-invalid を付けない',
+    file: 'src/ui/app.ts',
+    needle: '      if (slot) paintFieldError(slot, error.message);',
+    replacement: '      if (slot) slot.textContent = error.message;',
+    catchers: [
+      "form spec for 'text' marks the field invalid on save and clears it after the fix",
+      "form spec for 'scene' marks the field invalid on save and clears it after the fix",
+    ],
+  },
+  {
+    name: 'q シーンを直しても aria-invalid を外さない',
+    file: 'src/ui/app.ts',
+    needle: "    if (input) input.setAttribute('aria-invalid', message ? 'true' : 'false');",
+    replacement:
+      "    if (input) input.setAttribute('aria-invalid', message || field === 'scene' ? 'true' : 'false');",
+    catchers: ["form spec for 'scene' marks the field invalid on save and clears it after the fix"],
+  },
+  {
+    name: 'r 必須から外したシーンの長さを検査しない',
+    file: 'src/domain/validate.ts',
+    needle: '    if (value.length > item.max) {',
+    replacement: "    if ((item.required || item.field === 'text') && value.length > item.max) {",
+    catchers: [
+      'rejects 101 characters in the scene after the scene is removed from the required set',
+    ],
+  },
+];
+
+// 検出と数えてはいけない変異。狙ったテストは AssertionError で落ちるが、
+// その前に実行時例外が起きている。これを「検出」と数えたらスクリプトを失敗させる。
+const mustReject = [
+  {
+    name: 'X1 blur の処理の中で ReferenceError を起こす',
+    file: 'src/ui/app.ts',
+    needle: "    paintFieldError(slot, target.value.trim() ? '' : message);",
+    replacement:
+      "    paintFieldError(slot, target.value.trim() ? '' : String(new Function('return notDefinedAnywhere')()));",
+    catchers: [
+      "form spec for 'text' shows the spec message on blur and links it to the field with aria-describedby",
+      "form spec for 'scene' shows the spec message on blur and links it to the field with aria-describedby",
+    ],
+  },
+  {
+    name: 'X2 検証の中で TypeError を起こす',
+    file: 'src/domain/validate.ts',
+    needle: '    if (value.length > item.max) {',
+    replacement: '    if (value.length > (null as unknown as { max: number }).max) {',
+    catchers: [
+      "form spec for 'text' accepts exactly the limit and rejects one more with the spec message",
+    ],
+  },
 ];
 
 let currentChild = null;
@@ -220,6 +292,7 @@ process.on('exit', restoreBackup);
 for (const [signal, code] of [
   ['SIGINT', 130],
   ['SIGTERM', 143],
+  ['SIGHUP', 129],
 ]) {
   process.once(signal, () => {
     if (handlingSignal) return;
@@ -236,7 +309,7 @@ for (const [signal, code] of [
   });
 }
 
-function run(command, args, timeoutMs = 300_000) {
+function run(command, args, timeoutMs = 300_000, env = process.env) {
   return new Promise((resolveRun) => {
     let stdout = '';
     let stderr = '';
@@ -244,6 +317,7 @@ function run(command, args, timeoutMs = 300_000) {
     const child = spawn(command, args, {
       cwd: root,
       detached: true,
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     currentChild = child;
@@ -344,23 +418,65 @@ function readReport(reportFile) {
   };
 }
 
+function readErrorReport(errorReportFile) {
+  let report;
+  try {
+    report = JSON.parse(readFileSync(errorReportFile, 'utf8'));
+  } catch {
+    return { ok: false, kind: 'reporter', reason: 'Vitest のエラーレポートを読めません' };
+  }
+  if (!Array.isArray(report.stderr) || !Array.isArray(report.unhandledErrors)) {
+    return {
+      ok: false,
+      kind: 'reporter',
+      reason: 'Vitest のエラーレポートの形式が正しくありません',
+    };
+  }
+  return { ok: true, ...report };
+}
+
+function describeRuntimeErrors(report, limit = 3) {
+  const details = [
+    ...report.stderr.map((log) => {
+      const testName = log.testName ? ` (${log.testName})` : log.origin ? ` (${log.origin})` : '';
+      return `stderr${testName}: ${log.content}`;
+    }),
+    ...report.unhandledErrors.map((error) => {
+      const location = error.testName ?? error.moduleId;
+      const testName = location ? ` (${location})` : '';
+      const description = error.message ?? JSON.stringify(error);
+      return `unhandled error${testName}: ${error.name ? `${error.name}: ` : ''}${description}`;
+    }),
+  ];
+  return details.slice(0, limit).map((detail) => detail.replace(/\s+/g, ' ').slice(0, 280));
+}
+
 async function runVitest() {
   const tempDir = mkdtempSync(resolve(tmpdir(), 'dajare-required-mutations-'));
   const reportFile = resolve(tempDir, 'vitest.json');
+  const errorReportFile = resolve(tempDir, 'vitest-errors.json');
   try {
-    const result = await run('npx', [
-      'vitest',
-      'run',
-      ...testFiles,
-      '--reporter=json',
-      `--outputFile=${reportFile}`,
-    ]);
+    const result = await run(
+      'npx',
+      [
+        'vitest',
+        'run',
+        ...testFiles,
+        '--reporter=json',
+        `--reporter=${resolve(root, 'scripts/mutation-error-reporter.mjs')}`,
+        `--outputFile=${reportFile}`,
+      ],
+      300_000,
+      { ...process.env, MUTATION_ERROR_REPORT_FILE: errorReportFile },
+    );
     const failure = childFailure(result, 'Vitest');
     if (failure) return { ok: false, reason: failure };
     const report = readReport(reportFile);
     if (!report.ok) return report;
+    const errorReport = readErrorReport(errorReportFile);
+    if (!errorReport.ok) return errorReport;
     if (report.totalTests === 0) return { ok: false, reason: '対象テストが実行されませんでした' };
-    return { ...report, status: result.status };
+    return { ...report, ...errorReport, status: result.status };
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -368,7 +484,7 @@ async function runVitest() {
 
 function assertCatchersPassed(report) {
   const passed = new Set(report.passedNames);
-  for (const mutation of mutations) {
+  for (const mutation of [...mutations, ...mustReject]) {
     for (const catcher of mutation.catchers) {
       if (!passed.has(catcher)) {
         return `${mutation.name}: 基準実行で catcher が passed ではありません: ${catcher}`;
@@ -401,7 +517,7 @@ async function checkMutation(mutation) {
     if (!typecheck.ok) return { ok: false, reason: typecheck.reason };
 
     const report = await runVitest();
-    if (!report.ok) return { ok: false, reason: report.reason };
+    if (!report.ok) return { ok: false, kind: report.kind, reason: report.reason };
     if (report.status === 0 || report.failed.length === 0) {
       return { ok: false, reason: 'テストが失敗せず、変異が残りました' };
     }
@@ -412,6 +528,14 @@ async function checkMutation(mutation) {
     if (!catcher) {
       return { ok: false, reason: '狙った catcher が失敗しませんでした' };
     }
+    if (report.stderr.length > 0 || report.unhandledErrors.length > 0) {
+      const [first] = describeRuntimeErrors(report, 1);
+      return {
+        ok: false,
+        kind: 'runtime',
+        reason: `実行中に例外やページのエラーが出ました: ${first}`,
+      };
+    }
     const nonAssertions = report.failed.flatMap((assertion) =>
       assertion.failureMessages.filter((message) => !message.startsWith('AssertionError')),
     );
@@ -419,7 +543,11 @@ async function checkMutation(mutation) {
       nonAssertions.length > 0 ||
       report.failed.some((assertion) => assertion.failureMessages.length === 0)
     ) {
-      return { ok: false, reason: '実行時例外など AssertionError 以外の失敗があります' };
+      return {
+        ok: false,
+        kind: 'runtime',
+        reason: '実行時例外など AssertionError 以外の失敗があります',
+      };
     }
     return { ok: true, caught: report.failed.map((assertion) => assertion.fullName) };
   } finally {
@@ -436,6 +564,14 @@ async function main() {
     return;
   }
   const baseline = await runVitest();
+  if (baseline.ok && (baseline.stderr.length > 0 || baseline.unhandledErrors.length > 0)) {
+    const errors = describeRuntimeErrors(baseline);
+    console.error(
+      `基準の実行でエラーが出ています:\n${errors.map((error) => `- ${error}`).join('\n')}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   if (
     !baseline.ok ||
     baseline.status !== 0 ||
@@ -461,6 +597,17 @@ async function main() {
     } else {
       failed = true;
       console.error(`${mutation.name}：失敗（${result.reason}）`);
+    }
+  }
+  for (const mutation of mustReject) {
+    const result = await checkMutation(mutation);
+    if (!result.ok && result.kind === 'runtime') {
+      console.log(`${mutation.name}：検出と数えない（${result.reason}）`);
+    } else {
+      failed = true;
+      console.error(
+        `${mutation.name}：失敗（${result.ok ? `検出と数えました: ${result.caught.join('、')}` : result.reason}）`,
+      );
     }
   }
   if (failed) process.exitCode = 1;
