@@ -83,6 +83,20 @@ it('marks an invalid required field and clears aria-invalid after it is fixed', 
   expect(text?.getAttribute('aria-invalid')).toBe('false');
 });
 
+it('rejects 101 characters in the scene after the scene is removed from the required set', () => {
+  const fields = FORM_FIELDS.map((item) => ({
+    ...item,
+    required: item.field !== 'scene' && item.required,
+  }));
+  useFormFields(fields, () => {
+    expect(validateDraft({ ...blank(), text: '本文', scene: ' ' }).ok).toBe(true);
+    expect(validateDraft({ ...blank(), text: '本文', scene: 'あ'.repeat(100) }).ok).toBe(true);
+    expect(validateDraft({ ...blank(), text: '本文', scene: 'あ'.repeat(101) }).errors).toEqual([
+      { field: 'scene', message: 'シーンは100文字以内にしてください' },
+    ]);
+  });
+});
+
 it('enforces the length limit for a field removed from the required set', () => {
   const fields = FORM_FIELDS.map((item) => ({
     ...item,
