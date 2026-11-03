@@ -1,4 +1,5 @@
 import { hashId } from '../domain/ids';
+import { formField } from '../domain/required-fields';
 import type { Dajare } from '../types';
 import { addedLabel, escapeHtml } from './html';
 
@@ -63,7 +64,7 @@ export class DajareCard extends HTMLElement {
           : '';
     const sceneHtml =
       item.scene && item.scene !== '不明'
-        ? `<p class="scene"><span>場面</span> <em>${escapeHtml(item.scene)}</em></p>`
+        ? `<p class="scene"><span>${escapeHtml(formField('scene').label)}</span> <em>${escapeHtml(item.scene)}</em></p>`
         : '';
     const speakers =
       item.speakers.length > 0

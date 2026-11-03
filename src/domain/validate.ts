@@ -1,11 +1,11 @@
 import type { DajareDraft, Rating } from '../types';
 import { isIsoDate } from './ids';
-import { currentRequiredFields } from './required-fields';
-export { REQUIRED_FIELDS, requiredEmptyMessage, type RequiredField } from './required-fields';
+import { currentFormFields, FIELD_SPECS } from './required-fields';
+export { REQUIRED_FIELDS, requiredEmptyMessage, type FieldSpec } from './required-fields';
 
 export const LIMITS = {
-  text: 200,
-  scene: 100,
+  text: FIELD_SPECS.text.max,
+  scene: FIELD_SPECS.scene.max,
   reading: 200,
   source: 100,
   memo: 500,
@@ -92,18 +92,18 @@ export function validateDraft(input: DajareDraft): ValidationResult {
   const addedAtNote = input.addedAtNote.trim();
   const addedAt = input.addedAt === null ? null : input.addedAt.trim() || null;
 
-  const trimmed: Record<string, string> = { text, scene };
-  for (const item of currentRequiredFields()) {
-    const value = trimmed[item.field] ?? '';
-    if (!value) {
+  const trimmed = Object.fromEntries(
+    currentFormFields().map((item) => [item.field, input[item.field].trim()]),
+  ) as Record<keyof typeof FIELD_SPECS, string>;
+  for (const item of currentFormFields()) {
+    const value = trimmed[item.field];
+    if (!value && item.required) {
       errors.push({ field: item.field, message: item.emptyMessage });
-      continue;
     }
-    const max = LIMITS[item.field];
-    if (value.length > max) {
+    if (value.length > item.max) {
       errors.push({
         field: item.field,
-        message: `${item.label}は${max}文字以内にしてください`,
+        message: `${item.label}は${item.max}文字以内にしてください`,
       });
     }
   }

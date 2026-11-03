@@ -12,7 +12,12 @@ import {
   type ImportPlan,
 } from '../domain/transfer';
 import { codePointLength, LIMITS, READING_RE } from '../domain/validate';
-import { currentRequiredFields, requiredEmptyMessage } from '../domain/required-fields';
+import {
+  currentFormFields,
+  currentRequiredFields,
+  requiredEmptyMessage,
+  type FormFieldName,
+} from '../domain/required-fields';
 import { defaultQuery, queryItems, type SortKey, type TagMode } from '../domain/query';
 import type { DajareStore } from '../store/dajare-store';
 import { adaptLocalStore } from '../store/local-dajare-store';
@@ -424,9 +429,12 @@ export function mount(
     const addedRaw = String(data.get('addedAt') ?? '');
     const star = panel.querySelector('star-rating');
     const starRaw = star?.getAttribute('value');
+    const formValues = Object.fromEntries(
+      currentFormFields().map((spec) => [spec.field, String(data.get(spec.field) ?? '')]),
+    ) as Record<FormFieldName, string>;
     return {
-      text: String(data.get('text') ?? ''),
-      scene: String(data.get('scene') ?? ''),
+      text: formValues.text,
+      scene: formValues.scene,
       addedAt: unknown || addedRaw === '' ? null : addedRaw,
       addedAtNote: String(data.get('addedAtNote') ?? ''),
       reading: String(data.get('reading') ?? ''),
@@ -1391,8 +1399,7 @@ function chipHtml(id: string, values: string[]): string {
 
 function updateCounters(form: HTMLFormElement): void {
   const pairs: [string, number][] = [
-    ['text', LIMITS.text],
-    ['scene', LIMITS.scene],
+    ...currentFormFields().map((spec): [string, number] => [spec.field, spec.max]),
     ['reading', LIMITS.reading],
     ['source', LIMITS.source],
     ['memo', LIMITS.memo],

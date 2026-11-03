@@ -1,7 +1,7 @@
 import { localDateString } from '../domain/ids';
 import type { ImportPlan } from '../domain/transfer';
 import { LIMITS } from '../domain/validate';
-import { currentRequiredFields, formLabel, type RequiredName } from '../domain/required-fields';
+import { currentRequiredFields, formField, type FormFieldName } from '../domain/required-fields';
 import type { Dajare } from '../types';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
@@ -15,17 +15,26 @@ function fieldName(label: string, required: boolean): string {
   return `<span class="field-name">${label}${mark}</span>`;
 }
 
-function named(field: RequiredName): string {
-  const item = currentRequiredFields().find((row) => row.field === field);
-  return fieldName(item?.label ?? formLabel(field), Boolean(item));
+function named(field: FormFieldName): string {
+  const definition = formField(field);
+  const required = currentRequiredFields().some((row) => row.field === field);
+  return fieldName(definition.label, required);
 }
 
-function requiredAttr(field: RequiredName): string {
+function requiredAttr(field: FormFieldName): string {
   return currentRequiredFields().some((row) => row.field === field) ? ' aria-required="true"' : '';
 }
 
+function errorId(field: string): string {
+  return `error-${field}`;
+}
+
+function describedBy(field: FormFieldName): string {
+  return ` aria-describedby="${errorId(field)}"`;
+}
+
 function fieldError(field: string): string {
-  return `<p class="field-error" data-error-for="${field}" aria-live="polite"></p>`;
+  return `<p class="field-error" id="${errorId(field)}" data-error-for="${field}" aria-live="polite"></p>`;
 }
 
 function chips(id: string, values: string[]): string {
@@ -57,6 +66,8 @@ export function formPanel(
   const added = item?.addedAt ?? today;
   const unknown = item ? item.addedAt === null : false;
   const title = mode === 'add' ? '紙を足す' : '書き直す';
+  const textField = formField('text');
+  const sceneField = formField('scene');
   return `
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="panel-title">
       <header class="sheet-head">
@@ -65,12 +76,12 @@ export function formPanel(
       </header>
       <form class="entry" id="dajare-form" novalidate>
         <p class="req-legend">＊は必須</p>
-        <label>${named('text')} ${counter('text', LIMITS.text)}
-          <textarea name="text" maxlength="${LIMITS.text}" rows="3"${requiredAttr('text')}>${escapeHtml(item?.text ?? '')}</textarea>
+        <label>${named('text')} ${counter('text', textField.max)}
+          <textarea name="text" maxlength="${textField.max}" rows="3"${requiredAttr('text')}${describedBy('text')}>${escapeHtml(item?.text ?? '')}</textarea>
         </label>
         ${fieldError('text')}
-        <label>${named('scene')} ${counter('scene', LIMITS.scene)}
-          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}"${requiredAttr('scene')} />
+        <label>${named('scene')} ${counter('scene', sceneField.max)}
+          <input name="scene" maxlength="${sceneField.max}" value="${escapeHtml(item?.scene ?? '')}"${requiredAttr('scene')}${describedBy('scene')} />
         </label>
         ${fieldError('scene')}
         <button type="button" class="quiet" data-action="scene-unknown">分からなければ「不明」</button>

@@ -1,49 +1,61 @@
-const LABELS = {
-  text: '本文',
-  scene: 'シーン',
-} as const;
+/** 名前で引けるフォーム項目の仕様。 */
+export type FormFieldName = 'text' | 'scene';
 
-export type RequiredName = keyof typeof LABELS;
-
-/** フォームの項目名。印や文言は、ここから取る。 */
-export function formLabel(field: RequiredName): string {
-  return LABELS[field];
+export interface FieldSpec {
+  field: FormFieldName;
+  label: string;
+  max: number;
+  emptyMessage: string;
+  required: boolean;
 }
 
-/** 空では保存できない項目。印・保存ボタン・離れたとき・保存時のチェックは、この定義だけを見る。 */
-export const REQUIRED_FIELDS = [
-  {
+export const FIELD_SPECS: Record<FormFieldName, FieldSpec> = {
+  text: {
     field: 'text',
-    label: LABELS.text,
-    emptyMessage: `${LABELS.text}を書いてください`,
+    label: '本文',
+    max: 200,
+    emptyMessage: '本文を書いてください',
+    required: true,
   },
-  {
+  scene: {
     field: 'scene',
-    label: LABELS.scene,
-    emptyMessage: `${LABELS.scene}を書いてください`,
+    label: 'シーン',
+    max: 100,
+    emptyMessage: 'シーンを書いてください',
+    required: true,
   },
-] as const;
+};
 
-export type RequiredField = (typeof REQUIRED_FIELDS)[number];
+/** 表示順を保ったフォーム項目一覧。 */
+export const FORM_FIELDS: readonly FieldSpec[] = [FIELD_SPECS.text, FIELD_SPECS.scene];
 
-let active: readonly RequiredField[] = REQUIRED_FIELDS;
+/** 初期仕様で必須の項目。互換用途の静的な一覧。 */
+export const REQUIRED_FIELDS: readonly FieldSpec[] = FORM_FIELDS.filter((spec) => spec.required);
 
-/** いま有効な必須の定義。 */
-export function currentRequiredFields(): readonly RequiredField[] {
-  return active;
+let activeFields: readonly FieldSpec[] = FORM_FIELDS;
+
+export function currentFormFields(): readonly FieldSpec[] {
+  return activeFields;
 }
 
-/**
- * テストが定義を差し替える入口。
- * 印、保存ボタン、入力欄から離れたとき、保存時のチェックは、この入口の返す配列だけを見る。
- */
-export function useRequiredFields<T>(fields: readonly RequiredField[], run: () => T): T {
-  const previous = active;
-  active = fields;
+export function formField(name: FormFieldName): FieldSpec {
+  const spec = activeFields.find((item) => item.field === name);
+  if (!spec) throw new Error(`フォーム項目の定義がありません: ${name}`);
+  return spec;
+}
+
+export function currentRequiredFields(): readonly FieldSpec[] {
+  return currentFormFields().filter((spec) => spec.required);
+}
+
+/** テスト用に有効なフォーム定義を一時的に差し替える。 */
+export function useFormFields<T>(fields: readonly FieldSpec[], run: () => T): T {
+  const previous = activeFields;
+  activeFields = fields;
   try {
     return run();
   } finally {
-    active = previous;
+    activeFields = previous;
   }
 }
 
