@@ -292,6 +292,7 @@ process.on('exit', restoreBackup);
 for (const [signal, code] of [
   ['SIGINT', 130],
   ['SIGTERM', 143],
+  ['SIGHUP', 129],
 ]) {
   process.once(signal, () => {
     if (handlingSignal) return;
@@ -308,7 +309,7 @@ for (const [signal, code] of [
   });
 }
 
-function run(command, args, timeoutMs = 300_000) {
+function run(command, args, timeoutMs = 300_000, env = process.env) {
   return new Promise((resolveRun) => {
     let stdout = '';
     let stderr = '';
@@ -316,6 +317,7 @@ function run(command, args, timeoutMs = 300_000) {
     const child = spawn(command, args, {
       cwd: root,
       detached: true,
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     currentChild = child;
@@ -416,23 +418,65 @@ function readReport(reportFile) {
   };
 }
 
+function readErrorReport(errorReportFile) {
+  let report;
+  try {
+    report = JSON.parse(readFileSync(errorReportFile, 'utf8'));
+  } catch {
+    return { ok: false, kind: 'reporter', reason: 'Vitest のエラーレポートを読めません' };
+  }
+  if (!Array.isArray(report.stderr) || !Array.isArray(report.unhandledErrors)) {
+    return {
+      ok: false,
+      kind: 'reporter',
+      reason: 'Vitest のエラーレポートの形式が正しくありません',
+    };
+  }
+  return { ok: true, ...report };
+}
+
+function describeRuntimeErrors(report, limit = 3) {
+  const details = [
+    ...report.stderr.map((log) => {
+      const testName = log.testName ? ` (${log.testName})` : log.origin ? ` (${log.origin})` : '';
+      return `stderr${testName}: ${log.content}`;
+    }),
+    ...report.unhandledErrors.map((error) => {
+      const location = error.testName ?? error.moduleId;
+      const testName = location ? ` (${location})` : '';
+      const description = error.message ?? JSON.stringify(error);
+      return `unhandled error${testName}: ${error.name ? `${error.name}: ` : ''}${description}`;
+    }),
+  ];
+  return details.slice(0, limit).map((detail) => detail.replace(/\s+/g, ' ').slice(0, 280));
+}
+
 async function runVitest() {
   const tempDir = mkdtempSync(resolve(tmpdir(), 'dajare-required-mutations-'));
   const reportFile = resolve(tempDir, 'vitest.json');
+  const errorReportFile = resolve(tempDir, 'vitest-errors.json');
   try {
-    const result = await run('npx', [
-      'vitest',
-      'run',
-      ...testFiles,
-      '--reporter=json',
-      `--outputFile=${reportFile}`,
-    ]);
+    const result = await run(
+      'npx',
+      [
+        'vitest',
+        'run',
+        ...testFiles,
+        '--reporter=json',
+        `--reporter=${resolve(root, 'scripts/mutation-error-reporter.mjs')}`,
+        `--outputFile=${reportFile}`,
+      ],
+      300_000,
+      { ...process.env, MUTATION_ERROR_REPORT_FILE: errorReportFile },
+    );
     const failure = childFailure(result, 'Vitest');
     if (failure) return { ok: false, reason: failure };
     const report = readReport(reportFile);
     if (!report.ok) return report;
+    const errorReport = readErrorReport(errorReportFile);
+    if (!errorReport.ok) return errorReport;
     if (report.totalTests === 0) return { ok: false, reason: '対象テストが実行されませんでした' };
-    return { ...report, status: result.status };
+    return { ...report, ...errorReport, status: result.status };
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -473,7 +517,7 @@ async function checkMutation(mutation) {
     if (!typecheck.ok) return { ok: false, reason: typecheck.reason };
 
     const report = await runVitest();
-    if (!report.ok) return { ok: false, reason: report.reason };
+    if (!report.ok) return { ok: false, kind: report.kind, reason: report.reason };
     if (report.status === 0 || report.failed.length === 0) {
       return { ok: false, reason: 'テストが失敗せず、変異が残りました' };
     }
@@ -483,6 +527,14 @@ async function checkMutation(mutation) {
     );
     if (!catcher) {
       return { ok: false, reason: '狙った catcher が失敗しませんでした' };
+    }
+    if (report.stderr.length > 0 || report.unhandledErrors.length > 0) {
+      const [first] = describeRuntimeErrors(report, 1);
+      return {
+        ok: false,
+        kind: 'runtime',
+        reason: `実行中に例外やページのエラーが出ました: ${first}`,
+      };
     }
     const nonAssertions = report.failed.flatMap((assertion) =>
       assertion.failureMessages.filter((message) => !message.startsWith('AssertionError')),
@@ -512,6 +564,14 @@ async function main() {
     return;
   }
   const baseline = await runVitest();
+  if (baseline.ok && (baseline.stderr.length > 0 || baseline.unhandledErrors.length > 0)) {
+    const errors = describeRuntimeErrors(baseline);
+    console.error(
+      `基準の実行でエラーが出ています:\n${errors.map((error) => `- ${error}`).join('\n')}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   if (
     !baseline.ok ||
     baseline.status !== 0 ||
