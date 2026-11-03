@@ -25,8 +25,16 @@ function requiredAttr(field: FormFieldName): string {
   return currentRequiredFields().some((row) => row.field === field) ? ' aria-required="true"' : '';
 }
 
+function errorId(field: string): string {
+  return `error-${field}`;
+}
+
+function describedBy(field: FormFieldName): string {
+  return ` aria-describedby="${errorId(field)}"`;
+}
+
 function fieldError(field: string): string {
-  return `<p class="field-error" data-error-for="${field}" aria-live="polite"></p>`;
+  return `<p class="field-error" id="${errorId(field)}" data-error-for="${field}" aria-live="polite"></p>`;
 }
 
 function chips(id: string, values: string[]): string {
@@ -67,11 +75,11 @@ export function formPanel(
       <form class="entry" id="dajare-form" novalidate>
         <p class="req-legend">＊は必須</p>
         <label>${named('text')} ${counter('text', LIMITS.text)}
-          <textarea name="text" maxlength="${LIMITS.text}" rows="3"${requiredAttr('text')}>${escapeHtml(item?.text ?? '')}</textarea>
+          <textarea name="text" maxlength="${LIMITS.text}" rows="3"${requiredAttr('text')}${describedBy('text')}>${escapeHtml(item?.text ?? '')}</textarea>
         </label>
         ${fieldError('text')}
         <label>${named('scene')} ${counter('scene', LIMITS.scene)}
-          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}"${requiredAttr('scene')} />
+          <input name="scene" maxlength="${LIMITS.scene}" value="${escapeHtml(item?.scene ?? '')}"${requiredAttr('scene')}${describedBy('scene')} />
         </label>
         ${fieldError('scene')}
         <button type="button" class="quiet" data-action="scene-unknown">分からなければ「不明」</button>
