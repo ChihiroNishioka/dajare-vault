@@ -11,6 +11,9 @@ const testFiles = [
   'tests/required-fields.test.ts',
   'tests/required-one-empty.test.ts',
   'tests/form-spec.test.ts',
+  'tests/notion-url.test.ts',
+  'tests/notion-link.test.ts',
+  'tests/notion-link-relay.test.ts',
 ];
 
 const mutations = [
@@ -176,6 +179,90 @@ const mutations = [
     catchers: [
       'uses a replaced text label, empty message and limit across the form, validation and card',
       'uses a replaced scene label, empty message and limit across the form, validation and card',
+    ],
+  },
+  {
+    name: 'n1 Notion リンクの許可ホストの判定を外す',
+    file: 'src/notion/notion-url.ts',
+    needle: '  if (!NOTION_LINK_HOSTS.includes(url.hostname)) return null;\n',
+    replacement: '',
+    catchers: ['safeNotionUrl rejects hosts other than www.notion.so and notion.so'],
+  },
+  {
+    name: 'n2 Notion リンクのホストを endsWith で緩く判定する',
+    file: 'src/notion/notion-url.ts',
+    needle: '  if (!NOTION_LINK_HOSTS.includes(url.hostname)) return null;',
+    replacement:
+      "  if (NOTION_LINK_HOSTS.length === 0 || !url.hostname.endsWith('notion.so')) return null;",
+    catchers: ['safeNotionUrl rejects hosts other than www.notion.so and notion.so'],
+  },
+  {
+    name: 'n3 Notion リンクの https: の判定を外す',
+    file: 'src/notion/notion-url.ts',
+    needle: "  if (url.protocol !== 'https:') return null;\n",
+    replacement: '',
+    catchers: ['safeNotionUrl rejects anything that is not an absolute https URL'],
+  },
+  {
+    name: 'n4 Notion リンクのクエリとフラグメントの判定を外す',
+    file: 'src/notion/notion-url.ts',
+    needle: '  if (url.search || url.hash || /[?#]/.test(value)) return null;\n',
+    replacement: '',
+    catchers: ['safeNotionUrl rejects user info, an unusual port, a query and a fragment'],
+  },
+  {
+    name: 'n5 リンクの rel を外す',
+    file: 'src/ui/panel.ts',
+    needle: ' rel="noopener noreferrer"',
+    replacement: '',
+    catchers: [
+      'notion link in the panel shows one Notionで開く link before 閉じる that opens in a new tab without a data-action',
+    ],
+  },
+  {
+    name: 'n6 リンクの rel から noopener を消す',
+    file: 'src/ui/panel.ts',
+    needle: ' rel="noopener noreferrer"',
+    replacement: ' rel="noreferrer"',
+    catchers: [
+      'notion link in the panel shows one Notionで開く link before 閉じる that opens in a new tab without a data-action',
+    ],
+  },
+  {
+    name: 'n7 リンクの target="_blank" を外す',
+    file: 'src/ui/panel.ts',
+    needle: ' target="_blank"',
+    replacement: '',
+    catchers: [
+      'notion link in the panel shows one Notionで開く link before 閉じる that opens in a new tab without a data-action',
+    ],
+  },
+  {
+    name: 'n8 失敗のときもリンクを出す',
+    file: 'src/ui/panel.ts',
+    needle: "const linkUrl = mode === 'done' && !failure ?",
+    replacement: "const linkUrl = mode === 'done' ?",
+    catchers: [
+      'notion link in the panel shows no link without a url, on failure, or before the backup is done',
+    ],
+  },
+  {
+    name: 'n9 閉じている間に終わった結果に URL を持たせない',
+    file: 'src/ui/app.ts',
+    needle: "      if (mode === 'done') notionUnseen = { text, failure, notionUrl };",
+    replacement: "      if (mode === 'done') notionUnseen = { text, failure, notionUrl: null };",
+    catchers: [
+      'notion link in the app keeps the link of a backup that finished while the panel was closed',
+    ],
+  },
+  {
+    name: 'n10 client で finish の notionUrl を確かめずに使う',
+    file: 'src/notion/client.ts',
+    needle: '      const notionUrl = safeNotionUrl(finished.notionUrl);',
+    replacement:
+      "      const notionUrl = typeof safeNotionUrl === 'function' ? ((finished.notionUrl ?? null) as string | null) : null;",
+    catchers: [
+      'notion link in the backup client drops a missing, null or unsafe notionUrl and still succeeds',
     ],
   },
 ];

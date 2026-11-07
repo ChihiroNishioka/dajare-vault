@@ -3,6 +3,7 @@ import type { ImportPlan } from '../domain/transfer';
 import { LIMITS } from '../domain/validate';
 import { currentRequiredFields, formField, type FormFieldName } from '../domain/required-fields';
 import type { Dajare } from '../types';
+import { safeNotionUrl } from '../notion/notion-url';
 import { SUGGESTED_SPEAKERS, SUGGESTED_TAGS } from './constants';
 import { escapeHtml } from './html';
 
@@ -187,9 +188,13 @@ export function settingsPanel(
 export function notionPanel(
   mode: 'idle' | 'running' | 'confirm' | 'done',
   text: string,
-  options?: { failure?: boolean; allowStart?: boolean },
+  options?: { failure?: boolean; allowStart?: boolean; notionUrl?: string | null },
 ): string {
   const failure = options?.failure === true;
+  const linkUrl = mode === 'done' && !failure ? safeNotionUrl(options?.notionUrl) : null;
+  const link = linkUrl
+    ? `<a class="sheet-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer" data-notion-link>Notionで開く</a>`
+    : '';
   const startDisabled = mode === 'running' || (mode === 'idle' && options?.allowStart === false);
   const showStart = mode === 'idle' || mode === 'running' || (mode === 'done' && failure);
   const start = showStart
@@ -206,6 +211,7 @@ export function notionPanel(
       <div class="sheet-actions">
         ${start}
         ${go}
+        ${link}
         <button type="button" data-action="close-panel">${mode === 'confirm' ? 'やめる' : '閉じる'}</button>
       </div>
     </div>

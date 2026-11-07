@@ -305,6 +305,23 @@ button.primary {
 button.danger {
   background: var(--coral);
 }
+a.sheet-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  border-radius: 2px 12px 3px 10px;
+  padding: 0.38rem 0.75rem;
+  box-shadow: 2px 2px 0 rgba(217, 205, 184, 0.95);
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+a.sheet-link:active {
+  transform: translate(1px, 1px);
+  box-shadow: none;
+}
 button.quiet,
 button.texty {
   background: transparent;
@@ -964,6 +981,7 @@ legend {
   }
   .actions button,
   .sheet-actions button,
+  .sheet-actions a.sheet-link,
   .star-btn,
   .chip,
   .tag-pick,

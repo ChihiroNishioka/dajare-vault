@@ -1,5 +1,6 @@
 import type { Dajare } from '../types';
 import { notionFailureMessage, notionProgress } from './messages';
+import { safeNotionUrl } from './notion-url';
 import { chunkEntries, dedupeEntries, type NotionDajare } from './plan';
 
 export const UPSERT_CHUNK = 10;
@@ -45,6 +46,8 @@ export interface BackupCounts {
   unchanged: number;
   archived: number;
   lastBackupAt: string;
+  /** 保管先のデータベースの URL。safeNotionUrl を通らなければ null。 */
+  notionUrl: string | null;
 }
 
 export interface BackupProgress {
@@ -188,9 +191,20 @@ export async function runNotionBackup(options: {
     }
     archived += pass.archived ?? 0;
     if (pass.done) {
-      const finished = (await post({ op: 'finish' })) as { lastBackupAt?: string };
+      const finished = (await post({ op: 'finish' })) as {
+        lastBackupAt?: string;
+        notionUrl?: unknown;
+      };
       if (!finished.lastBackupAt) throw new Error('最終保管の時刻を残せませんでした');
-      return { created, updated, unchanged, archived, lastBackupAt: finished.lastBackupAt };
+      const notionUrl = safeNotionUrl(finished.notionUrl);
+      return {
+        created,
+        updated,
+        unchanged,
+        archived,
+        lastBackupAt: finished.lastBackupAt,
+        notionUrl,
+      };
     }
     if (!pass.nextCursor) throw new Error('しまっておく続きが分かりません');
     confirm = true;

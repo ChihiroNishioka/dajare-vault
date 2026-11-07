@@ -130,7 +130,8 @@ export function mount(
   let notionText = '';
   let notionProgressText = '送っています…';
   let notionFailure = false;
-  let notionUnseen: { text: string; failure: boolean } | null = null;
+  let notionLink: string | null = null;
+  let notionUnseen: { text: string; failure: boolean; notionUrl: string | null } | null = null;
   let notionDismissed = false;
   let confirmArchive: ((ok: boolean) => void) | null = null;
   let lastNotionBackup: string | null = null;
@@ -646,9 +647,10 @@ export function mount(
   const showNotion = (
     mode: 'idle' | 'running' | 'confirm' | 'done',
     text: string,
-    opts: { force?: boolean; failure?: boolean } = {},
+    opts: { force?: boolean; failure?: boolean; notionUrl?: string | null } = {},
   ): void => {
     const failure = opts.failure === true;
+    const notionUrl = mode === 'done' && !failure ? (opts.notionUrl ?? null) : null;
     const open = ui.panel.kind === 'notion';
     if (open && mode === 'running' && notionMode === 'running') {
       notionText = text;
@@ -663,9 +665,10 @@ export function mount(
     notionMode = mode;
     notionText = text;
     notionFailure = failure;
+    notionLink = notionUrl;
     if (mode === 'running') notionProgressText = text;
     if (!open && !opts.force) {
-      if (mode === 'done') notionUnseen = { text, failure };
+      if (mode === 'done') notionUnseen = { text, failure, notionUrl };
       return;
     }
     notionUnseen = null;
@@ -673,6 +676,7 @@ export function mount(
     ui.panel = { kind: 'notion' };
     panel.innerHTML = notionPanel(mode, text, {
       failure,
+      notionUrl,
       allowStart: mode !== 'idle' || notionBlock() === null,
     });
     openPanel();
@@ -689,13 +693,18 @@ export function mount(
       showNotion(notionMode === 'idle' ? 'running' : notionMode, notionText, {
         force: true,
         failure: notionFailure,
+        notionUrl: notionLink,
       });
       return;
     }
     if (notionUnseen) {
       const unseen = notionUnseen;
       notionUnseen = null;
-      showNotion('done', unseen.text, { force: true, failure: unseen.failure });
+      showNotion('done', unseen.text, {
+        force: true,
+        failure: unseen.failure,
+        notionUrl: unseen.notionUrl,
+      });
       return;
     }
     showNotion('idle', notionIdleCopy(), { force: true });
@@ -801,7 +810,7 @@ export function mount(
       });
       if (generation !== notionGeneration) return;
       lastNotionBackup = result.lastBackupAt;
-      showNotion('done', notionSuccessMessage(result));
+      showNotion('done', notionSuccessMessage(result), { notionUrl: result.notionUrl });
     } catch (error) {
       if (generation !== notionGeneration) return;
       const message = error instanceof Error ? error.message : 'Notionへの保管に失敗しました';
