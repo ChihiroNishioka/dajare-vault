@@ -70,5 +70,9 @@ describe('notionUrlFromId', () => {
     expect(notionUrlFromId(ID)).toBe(`https://www.notion.so/${ID}`);
     expect(notionUrlFromId('db-1')).toBeNull();
     expect(notionUrlFromId('../secret')).toBeNull();
+    // 32 桁の 16 進でも、ハイフンの位置が Notion の id の形でなければ作らない。
+    expect(notionUrlFromId('0123456789abcdef-0123456789abcdef')).toBeNull();
+    expect(notionUrlFromId(`-${ID}`)).toBeNull();
+    expect(notionUrlFromId(`${ID.slice(0, 8)}--${ID.slice(8)}`)).toBeNull();
   });
 });

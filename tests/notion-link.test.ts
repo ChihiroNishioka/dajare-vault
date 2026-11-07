@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // 仕様の値（「Notionで開く」、_blank、noopener、www.notion.so）は定義から読まず、ここに文字で書く。
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { NOTION_RELAY_MISSING } from '../src/notion/messages';
 import { runNotionBackup } from '../src/notion/client';
 import type { NotionDajare } from '../src/notion/plan';
 import { memoryStorage } from '../src/store/memory';
@@ -132,24 +135,65 @@ describe('notion link in the panel', () => {
     }
   });
 
-  it('never lets a quote in the url break out of the href attribute', () => {
+  // 入口（safeNotionUrl）が先に弾くことだけを確かめる。href の escapeHtml は
+  // tests/notion-link-escape.test.ts で入口を外して単独で確かめる。
+  it('drops a url with a quote at the entry check, so no link is drawn', () => {
     const root = html(
       notionPanel('done', '新しく 1 件', { notionUrl: `${URL_OK}" onclick="alert(1)` }),
     );
+    expect(root.querySelectorAll('a')).toHaveLength(0);
     expect(root.querySelector('[onclick]')).toBeNull();
-    for (const link of root.querySelectorAll('a')) {
-      expect(link.getAttributeNames().sort()).toEqual(
-        ['data-notion-link', 'href', 'rel', 'target', 'class'].sort(),
-      );
-      expect(link.getAttribute('href')).not.toContain('"');
-    }
+    expect(root.querySelector('[data-action="close-panel"]')?.textContent).toBe('閉じる');
+  });
+});
+
+describe('notion link styles', () => {
+  it('gives the link the 44px tap height on narrow screens', () => {
+    const css = readFileSync(resolve(__dirname, '../src/styles/app.css'), 'utf8');
+    const narrow = css.indexOf('@media (max-width: 860px)');
+    expect(narrow).toBeGreaterThan(-1);
+    const rules = [...css.matchAll(/([^{}]+)\{\s*min-height:\s*44px;\s*\}/g)].filter(
+      (match) => (match.index ?? -1) > narrow,
+    );
+    expect(rules.length).toBeGreaterThan(0);
+    const selectors = rules.flatMap((match) => match[1].split(',').map((part) => part.trim()));
+    expect(selectors).toContain('.sheet-actions a.sheet-link');
   });
 });
 
 describe('notion link in the app', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     document.body.replaceChildren();
+  });
+
+  // e2e のビルドは VITE_FORCE_LOCAL=1 でモックの宛先が必ず入るため、未設定は画面のテストで作る。
+  it('shows no link when the relay is not configured', async () => {
+    vi.stubEnv('VITE_NOTION_RELAY_URL', '');
+    vi.stubEnv('VITE_FORCE_LOCAL', '');
+    vi.stubEnv('DEV', false);
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (async (url: string) => {
+      calls.push(String(url));
+      return Response.json({});
+    }) as typeof fetch);
+    window.history.replaceState(null, '', '/?mock=editor');
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    mount(root, createStore(memoryStorage(), { seedOnEmpty: true }));
+    root.querySelector<HTMLButtonElement>('[data-action="notion-open"]')?.click();
+    root.querySelector<HTMLButtonElement>('[data-action="notion-backup"]')?.click();
+    await vi.waitFor(() =>
+      expect(root.querySelector('[data-notion-status]')?.textContent).toBe(NOTION_RELAY_MISSING),
+    );
+    const dialog = root.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelectorAll('a')).toHaveLength(0);
+    expect(dialog?.querySelector('[data-notion-link]')).toBeNull();
+    expect(dialog?.querySelector('[data-action="notion-backup"]')?.textContent).toBe('はじめる');
+    expect(dialog?.querySelector('[data-action="close-panel"]')?.textContent).toBe('閉じる');
+    expect(calls).toHaveLength(0);
   });
 
   it('keeps the link of a backup that finished while the panel was closed', async () => {

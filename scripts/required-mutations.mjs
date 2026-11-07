@@ -14,6 +14,7 @@ const testFiles = [
   'tests/notion-url.test.ts',
   'tests/notion-link.test.ts',
   'tests/notion-link-relay.test.ts',
+  'tests/notion-link-escape.test.ts',
 ];
 
 const mutations = [
@@ -260,10 +261,91 @@ const mutations = [
     file: 'src/notion/client.ts',
     needle: '      const notionUrl = safeNotionUrl(finished.notionUrl);',
     replacement:
-      "      const notionUrl = typeof safeNotionUrl === 'function' ? ((finished.notionUrl ?? null) as string | null) : null;",
+      "      const notionUrl = typeof finished.notionUrl === 'string' ? finished.notionUrl : safeNotionUrl(null);",
     catchers: [
       'notion link in the backup client drops a missing, null or unsafe notionUrl and still succeeds',
     ],
+  },
+  {
+    name: 'n11 リンクの data-notion-link を外す',
+    file: 'src/ui/panel.ts',
+    needle: ' data-notion-link>Notionで開く',
+    replacement: '>Notionで開く',
+    catchers: [
+      'notion link in the panel shows one Notionで開く link before 閉じる that opens in a new tab without a data-action',
+      'notion link in the app keeps the link of a backup that finished while the panel was closed',
+    ],
+  },
+  {
+    name: 'n12 リンクに data-action を付けてクリック委譲に入れる',
+    file: 'src/ui/panel.ts',
+    needle: ' data-notion-link>Notionで開く',
+    replacement: ' data-notion-link data-action="close-panel">Notionで開く',
+    catchers: [
+      'notion link in the panel shows one Notionで開く link before 閉じる that opens in a new tab without a data-action',
+      'notion link href escaping keeps quotes and tags inside the href when the entry check lets them through',
+    ],
+  },
+  {
+    name: 'n13 リンクの href の escapeHtml を外す',
+    file: 'src/ui/panel.ts',
+    needle: 'href="${escapeHtml(linkUrl)}"',
+    replacement: 'href="${linkUrl}"',
+    catchers: [
+      'notion link href escaping keeps quotes and tags inside the href when the entry check lets them through',
+    ],
+  },
+  {
+    name: 'n14 URL の長さの上限ちょうど（200）を拒否する',
+    file: 'src/notion/notion-url.ts',
+    needle: 'value.length > 200',
+    replacement: 'value.length >= 200',
+    catchers: [
+      'safeNotionUrl rejects paths that are not a Notion id and values that are not short strings',
+    ],
+  },
+  {
+    name: 'n15 URL の長さの上限 +1（201）を受け入れる',
+    file: 'src/notion/notion-url.ts',
+    needle: 'value.length > 200',
+    replacement: 'value.length > 201',
+    catchers: [
+      'safeNotionUrl rejects paths that are not a Notion id and values that are not short strings',
+    ],
+  },
+  {
+    name: 'n16 notionUrlFromId の id の形の判定をハイフン抜きで緩める',
+    file: 'src/notion/notion-url.ts',
+    needle: '  if (!isNotionId(id)) return null;',
+    replacement: "  if (!isNotionId(id.replaceAll('-', ''))) return null;",
+    catchers: [
+      'notionUrlFromId builds www.notion.so with 32 lowercase hex digits and refuses a non-Notion id',
+    ],
+  },
+  {
+    name: 'n17 Worker の finish で safeNotionUrl を通らなかった値をそのまま返す',
+    file: 'src/notion/handler.ts',
+    needle: 'notionUrl: safeNotionUrl(finished.notionUrl)',
+    replacement: 'notionUrl: safeNotionUrl(finished.notionUrl) ?? finished.notionUrl',
+    catchers: [
+      'relay notionUrl returns 200 with notionUrl null and lastBackupAt when the id or url is not safe',
+    ],
+  },
+  {
+    name: 'n18 Notion の finish で id を正規化せずに URL を作る',
+    file: 'src/notion/notion-api.ts',
+    needle: 'notionUrl: notionUrlFromId(databaseId)',
+    replacement: 'notionUrl: notionUrlFromId(databaseId) && `https://www.notion.so/${databaseId}`',
+    catchers: [
+      'relay notionUrl finish returns www.notion.so with the found database id in 32 lowercase hex digits',
+    ],
+  },
+  {
+    name: 'n19 狭い画面でリンクの高さ 44px を外す',
+    file: 'src/styles/app.css',
+    needle: '  .sheet-actions a.sheet-link,\n',
+    replacement: '',
+    catchers: ['notion link styles gives the link the 44px tap height on narrow screens'],
   },
 ];
 
