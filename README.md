@@ -67,11 +67,34 @@ Pages の設定（ブランチを `gh-pages` / root にする）と、リポジ�
 
 ```bash
 npm ci
-npm run build
+VITE_NOTION_RELAY_URL=https://dajare-notion-backup.chihiro-nishioka.workers.dev npm run build
+grep -l workers.dev dist/assets/*.js
 rm -rf .pages
 mkdir .pages
 cp -a dist/. .pages/
 touch .pages/.nojekyll
+```
+
+`grep` が JavaScript ファイルを表示することを確認してから、`.pages/` の中身を `gh-pages` にコミットして push します。反映後に、公開ページが指定する JavaScript のパスを表示します。
+
+```bash
+curl -fsSL https://chihironishioka.github.io/dajare-vault/ | grep -oE 'assets/[^" ]+\.js'
+```
+
+表示されたパスを次の URL に入れ、`grep` が成功することを確認します。
+
+```bash
+curl -fsSL https://chihironishioka.github.io/dajare-vault/assets/<表示されたファイル名>.js | grep -q workers.dev
+```
+
+リレーには公開元の Origin を付けて `OPTIONS` を送り、応答コードが `204` であることを確認します。
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X OPTIONS \
+  -H 'Origin: https://chihironishioka.github.io' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: authorization,content-type' \
+  https://dajare-notion-backup.chihiro-nishioka.workers.dev
 ```
 
 `.pages/` の中身だけを `gh-pages` ブランチのルートにコミットして push します。`main` へはマージしません。
