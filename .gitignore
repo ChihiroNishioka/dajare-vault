@@ -3,7 +3,7 @@ dist
 .pages
 playwright-report
 test-results
-screenshots
+/screenshots
 *.local
 .env
 .env.*

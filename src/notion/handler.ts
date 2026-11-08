@@ -1,5 +1,6 @@
 import { backupCors } from './cors';
 import type { NotionRelay } from './notion-api';
+import { safeNotionUrl } from './notion-url';
 import { dedupeEntries, isNotionId, type NotionDajare } from './plan';
 import { RetryLater } from './throttle';
 
@@ -114,7 +115,12 @@ export async function handleNotionBackup(
     }
     if (row.op === 'finish') {
       const at = new Date(deps.nowSec() * 1000).toISOString();
-      return json(await deps.notion.finish(at), 200, cors);
+      const finished = await deps.notion.finish(at);
+      return json(
+        { lastBackupAt: finished.lastBackupAt, notionUrl: safeNotionUrl(finished.notionUrl) },
+        200,
+        cors,
+      );
     }
   } catch (error) {
     if (error instanceof RetryLater) {

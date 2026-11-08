@@ -7,6 +7,7 @@ import {
   type NotionDajare,
   type NotionMatch,
 } from './plan';
+import { notionUrlFromId } from './notion-url';
 import {
   BudgetStop,
   createLimiter,
@@ -46,7 +47,7 @@ export interface NotionRelay {
   ensure(): Promise<{ databaseId: string; lastBackupAt: string | null }>;
   upsert(entries: NotionDajare[]): Promise<UpsertTally>;
   archive(liveIds: string[], cursor: string | null, confirm: boolean): Promise<ArchivePass>;
-  finish(at: string): Promise<{ lastBackupAt: string }>;
+  finish(at: string): Promise<{ lastBackupAt: string; notionUrl: string | null }>;
 }
 
 function richText(value: string): { rich_text: { type: 'text'; text: { content: string } }[] } {
@@ -504,7 +505,7 @@ export function createNotionClient(options: {
         },
         'write',
       );
-      return { lastBackupAt: at };
+      return { lastBackupAt: at, notionUrl: notionUrlFromId(databaseId) };
     },
   };
 }
