@@ -43,6 +43,7 @@ export interface Store {
   remove(id: string): boolean;
   exportItems(): Dajare[];
   markExported(at?: Date): void;
+  markBackedUp(at?: Date): void;
   setPromptOnChange(value: boolean): void;
   previewImport(
     raw: unknown,
@@ -288,6 +289,14 @@ export function createStore(storage: KeyValueStorage, options: StoreOptions = {}
           ...state.meta,
           lastExportAt: toUtcSeconds(at ?? now()),
           changesSinceExport: 0,
+        };
+      });
+    },
+    markBackedUp(at) {
+      mutate(() => {
+        state.meta = {
+          ...state.meta,
+          lastExportAt: toUtcSeconds(at && !Number.isNaN(at.getTime()) ? at : now()),
         };
       });
     },

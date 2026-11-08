@@ -810,6 +810,8 @@ export function mount(
       });
       if (generation !== notionGeneration) return;
       lastNotionBackup = result.lastBackupAt;
+      store.markBackedUp(new Date(result.lastBackupAt));
+      renderResults();
       showNotion('done', notionSuccessMessage(result), { notionUrl: result.notionUrl });
     } catch (error) {
       if (generation !== notionGeneration) return;

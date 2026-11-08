@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const backupFile = resolve(root, '.mutation-backup.json');
 const testFiles = [
+  'tests/store.test.ts',
   'tests/domain.test.ts',
   'tests/required-fields.test.ts',
   'tests/required-one-empty.test.ts',
@@ -18,6 +19,28 @@ const testFiles = [
 ];
 
 const mutations = [
+  {
+    name: 'G1 Notion 保管日時を更新しない',
+    file: 'src/store/store.ts',
+    needle: '          lastExportAt: toUtcSeconds(at && !Number.isNaN(at.getTime()) ? at : now()),',
+    replacement: '          lastExportAt: at ? state.meta.lastExportAt : null,',
+    catchers: ['createStore markBackedUp persists only the backup date in UTC seconds'],
+  },
+  {
+    name: 'G4 Notion 保管で変更件数をリセットする',
+    file: 'src/store/store.ts',
+    needle: '          lastExportAt: toUtcSeconds(at && !Number.isNaN(at.getTime()) ? at : now()),',
+    replacement: `          lastExportAt: toUtcSeconds(at && !Number.isNaN(at.getTime()) ? at : now()),
+          changesSinceExport: 0,`,
+    catchers: ['createStore markBackedUp persists only the backup date in UTC seconds'],
+  },
+  {
+    name: 'G2 JSON 書き出しで変更件数をリセットしない',
+    file: 'src/store/store.ts',
+    needle: '          changesSinceExport: 0,',
+    replacement: '          changesSinceExport: state.meta.changesSinceExport,',
+    catchers: ['createStore markExported still updates the date and resets changes'],
+  },
   {
     name: 'M8 保存ボタンの判定を固定の名前で行う',
     file: 'src/ui/app.ts',

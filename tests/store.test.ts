@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DATA_KEY } from '../src/types';
+import { DATA_KEY, META_KEY } from '../src/types';
 import { seedId } from '../src/domain/ids';
 import { memoryStorage } from '../src/store/memory';
 import { createStore } from '../src/store/store';
@@ -28,6 +28,47 @@ const tiny: VaultFile = {
 };
 
 describe('createStore', () => {
+  it('markBackedUp persists only the backup date in UTC seconds', () => {
+    const storage = memoryStorage({
+      [META_KEY]: JSON.stringify({
+        lastExportAt: '2026-11-01T00:00:00Z',
+        changesSinceExport: 17,
+        promptOnChange: true,
+      }),
+    });
+    const store = createStore(storage, { seed: tiny });
+    const items = structuredClone(store.getState().items);
+    store.markBackedUp(new Date('2026-11-08T12:34:56.789+09:00'));
+    const expected = {
+      lastExportAt: '2026-11-08T03:34:56Z',
+      changesSinceExport: 17,
+      promptOnChange: true,
+    };
+    expect(store.getState().meta).toEqual(expected);
+    expect(JSON.parse(storage.getItem(META_KEY) ?? '{}')).toEqual(expected);
+    expect(createStore(storage).getState().meta).toEqual(expected);
+    expect(store.getState().items).toEqual(items);
+  });
+
+  it('markExported still updates the date and resets changes', () => {
+    const storage = memoryStorage({
+      [META_KEY]: JSON.stringify({
+        lastExportAt: '2026-11-01T00:00:00Z',
+        changesSinceExport: 17,
+        promptOnChange: true,
+      }),
+    });
+    const store = createStore(storage, { seed: tiny });
+    store.markExported(new Date('2026-11-08T03:34:56.789Z'));
+    const expected = {
+      lastExportAt: '2026-11-08T03:34:56Z',
+      changesSinceExport: 0,
+      promptOnChange: true,
+    };
+    expect(store.getState().meta).toEqual(expected);
+    expect(createStore(storage).getState().meta).toEqual(expected);
+  });
+
   it('seeds only when storage is empty', () => {
     const storage = memoryStorage();
     const first = createStore(storage, {
