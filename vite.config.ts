@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type UserConfig } from 'vite';
 
 export function validateProductionRelayUrl({
   command,
@@ -17,12 +17,15 @@ export function validateProductionRelayUrl({
     forceLocal !== '1' &&
     relayUrl.trim() === ''
   ) {
-    throw new Error('本番ビルドには VITE_NOTION_RELAY_URL が必要です');
+    throw new Error(
+      '本番ビルドには VITE_NOTION_RELAY_URL が必要です。README の「公開」の手順で設定してください。ローカルで確認するだけなら VITE_FORCE_LOCAL=1 を付けます。',
+    );
   }
 }
 
-export default defineConfig(({ command, mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
+export function createConfig({ command, mode }: { command: string; mode: string }): UserConfig {
+  // 読むのは VITE_ で始まる値だけにする。ほかの環境変数（秘密を含みうる）は取り込まない。
+  const env = loadEnv(mode, process.cwd(), 'VITE_');
   validateProductionRelayUrl({
     command,
     mode,
@@ -33,4 +36,6 @@ export default defineConfig(({ command, mode }) => {
   return {
     base: '/dajare-vault/',
   };
-});
+}
+
+export default defineConfig(createConfig);

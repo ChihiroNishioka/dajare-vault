@@ -63,38 +63,58 @@ Safari のタブのまま何日も開かないと、保存が消えることが�
 
 Pages の設定（ブランチを `gh-pages` / root にする）と、リポジトリを public にする作業は、リポジトリの Settings で行います。ここにはトークンも Secrets も置きません。
 
-更新するときは、ソースのブランチでビルドし、`gh-pages` をその成果物で置き換えます。
+更新するときは、ソースのブランチでビルドし、`gh-pages` をその成果物で置き換えます。次の順に進めます。途中のコマンドが失敗したら、先へ進まず原因を直します。
 
-```bash
-npm ci
-VITE_NOTION_RELAY_URL=https://dajare-notion-backup.chihiro-nishioka.workers.dev npm run build
-grep -l workers.dev dist/assets/*.js
-rm -rf .pages
-mkdir .pages
-cp -a dist/. .pages/
-touch .pages/.nojekyll
-```
+1. ビルドして `.pages/` を作ります。括弧の中は `set -e` で動くので、どこかが失敗するとそこで止まります。リレーの URL は `RELAY` に1回だけ書き、ビルドと確認に使い回します。ビルドに URL が入っていないと、`vite build` かその後の `grep` が失敗します。
 
-`grep` が JavaScript ファイルを表示することを確認してから、`.pages/` の中身を `gh-pages` にコミットして push します。反映後に、公開ページが指定する JavaScript のパスを表示します。
+   ```bash
+   (
+     set -e
+     RELAY=https://dajare-notion-backup.chihiro-nishioka.workers.dev
+     npm ci
+     VITE_NOTION_RELAY_URL="$RELAY" npm run build
+     grep -lF "$RELAY" dist/assets/*.js
+     rm -rf .pages
+     mkdir .pages
+     cp -a dist/. .pages/
+     touch .pages/.nojekyll
+   )
+   ```
 
-```bash
-curl -fsSL https://chihironishioka.github.io/dajare-vault/ | grep -oE 'assets/[^" ]+\.js'
-```
+2. 手順1が最後まで通ったときだけ、`.pages/` の中身だけを `gh-pages` ブランチのルートにコミットして push します。`main` へはマージしません。
 
-表示されたパスを次の URL に入れ、`grep` が成功することを確認します。
+3. 反映を待ちます。Actions の `pages-build-deployment` が成功してから、次のコマンドで確認します。公開ページが読み込む JavaScript のパス（`assets/index-xxxx.js` の形）を調べ、その中にリレーの URL が入っていることを確かめます。
 
-```bash
-curl -fsSL https://chihironishioka.github.io/dajare-vault/assets/<表示されたファイル名>.js | grep -q workers.dev
-```
+   ```bash
+   (
+     set -e
+     RELAY=https://dajare-notion-backup.chihiro-nishioka.workers.dev
+     SITE=https://chihironishioka.github.io/dajare-vault
+     JS=$(curl -fsSL "$SITE/" | grep -oE 'assets/[^" ]+\.js' | head -n 1)
+     test -n "$JS"
+     echo "$JS"
+     curl -fsSL "$SITE/$JS" | grep -qF "$RELAY"
+     echo OK
+   )
+   ```
 
-リレーには公開元の Origin を付けて `OPTIONS` を送り、応答コードが `204` であることを確認します。
+4. リレーが公開元の Origin を許すことを確かめます。応答コードが `204` で、`access-control-allow-origin`、`access-control-allow-methods`、`access-control-allow-headers` が揃っていないと失敗します。
 
-```bash
-curl -sS -o /dev/null -w '%{http_code}\n' -X OPTIONS \
-  -H 'Origin: https://chihironishioka.github.io' \
-  -H 'Access-Control-Request-Method: POST' \
-  -H 'Access-Control-Request-Headers: authorization,content-type' \
-  https://dajare-notion-backup.chihiro-nishioka.workers.dev
-```
-
-`.pages/` の中身だけを `gh-pages` ブランチのルートにコミットして push します。`main` へはマージしません。
+   ```bash
+   (
+     set -e
+     RELAY=https://dajare-notion-backup.chihiro-nishioka.workers.dev
+     ORIGIN=https://chihironishioka.github.io
+     H=$(curl -sS -D - -o /dev/null -X OPTIONS \
+       -H "Origin: $ORIGIN" \
+       -H 'Access-Control-Request-Method: POST' \
+       -H 'Access-Control-Request-Headers: authorization,content-type' \
+       "$RELAY" | tr -d '\r')
+     echo "$H"
+     echo "$H" | head -n 1 | grep -q ' 204'
+     echo "$H" | grep -iqx "access-control-allow-origin: $ORIGIN"
+     echo "$H" | grep -iqE '^access-control-allow-methods:.*POST'
+     echo "$H" | grep -iqE '^access-control-allow-headers:.*authorization'
+     echo OK
+   )
+   ```
