@@ -6,6 +6,8 @@ mkdirSync('screenshots/notion', { recursive: true });
 type Calls = { total: number; ensure: number; upsert: number; archive: number; finish: number };
 type RelayOpts = {
   holdFirstUpsert?: Promise<void>;
+  holdFinish?: Promise<void>;
+  lastBackupAt?: string;
   archive?: 'ok' | 'fail' | 'confirm';
   onArchive?: (body: { confirmArchive?: boolean; cursor?: string | null }) => void;
 };
@@ -68,7 +70,10 @@ async function relay(page: Page, opts: RelayOpts = {}): Promise<Calls> {
       await route.fulfill({ json: { archived: 0, done: true, nextCursor: null } });
       return;
     }
-    await route.fulfill({ json: { lastBackupAt: '2026-11-01T08:00:00.000Z' } });
+    if (opts.holdFinish) await opts.holdFinish;
+    await route.fulfill({
+      json: { lastBackupAt: opts.lastBackupAt ?? '2026-11-01T08:00:00.000Z' },
+    });
   });
   return calls;
 }
@@ -933,4 +938,151 @@ test('F2 closing settings during a run does not reopen for a later confirm', asy
       animations: 'disabled',
     });
   }
+});
+
+const NOTICE_NOW = '2026-11-08T03:34:56.789Z';
+const OLD_META = {
+  lastExportAt: '2026-11-01T03:34:56Z',
+  changesSinceExport: 17,
+  promptOnChange: true,
+};
+
+async function openStaleNotice(page: Page): Promise<void> {
+  await page.clock.setFixedTime(new Date(NOTICE_NOW));
+  await page.addInitScript((meta) => {
+    if (!localStorage.getItem('dajareVault:meta:v1')) {
+      localStorage.setItem('dajareVault:meta:v1', JSON.stringify(meta));
+    }
+  }, OLD_META);
+  await openEditor(page);
+  await expect(page.locator('#banner')).toHaveText(
+    '最後にバックアップしたのは7日前。未書き出しの変更が17件。5日以上たっています',
+  );
+}
+
+async function savedMeta(page: Page): Promise<unknown> {
+  return page.evaluate(() => JSON.parse(localStorage.getItem('dajareVault:meta:v1') ?? '{}'));
+}
+
+for (const stamp of [NOTICE_NOW, 'invalid-date']) {
+  test(`B01 Notion success refreshes and persists the notice without resetting changes (${stamp})`, async ({
+    page,
+  }) => {
+    const calls = await relay(page, { lastBackupAt: stamp });
+    await openStaleNotice(page);
+    if (stamp === NOTICE_NOW) {
+      await page.screenshot({
+        path: `screenshots/notion/backup_notice_before_${page.viewportSize()?.width ?? 0}.png`,
+        animations: 'disabled',
+      });
+    }
+    await headerNotion(page).click();
+    await startButton(page).click();
+    await expect(page.getByText(/最終保管/)).toBeVisible();
+    await expect(page.locator('#banner')).toHaveText(
+      '最後にバックアップしたのは今日。未書き出しの変更が17件',
+    );
+    await expect(page.locator('#banner')).not.toContainText('5日以上');
+    expect(await savedMeta(page)).toEqual({ ...OLD_META, lastExportAt: '2026-11-08T03:34:56Z' });
+    expect(calls.finish).toBe(1);
+    await page.getByRole('button', { name: '閉じる' }).click();
+    if (stamp === NOTICE_NOW) {
+      await page.screenshot({
+        path: `screenshots/notion/backup_notice_after_${page.viewportSize()?.width ?? 0}.png`,
+        animations: 'disabled',
+      });
+    }
+    await page.reload();
+    await expect(page.locator('#banner')).toHaveText(
+      '最後にバックアップしたのは今日。未書き出しの変更が17件',
+    );
+    expect(await savedMeta(page)).toEqual({ ...OLD_META, lastExportAt: '2026-11-08T03:34:56Z' });
+  });
+}
+
+test('B02 relay 502 preserves the old backup date and warning', async ({ page }) => {
+  const calls = await relay(page, { archive: 'fail' });
+  await openStaleNotice(page);
+  await headerNotion(page).click();
+  await startButton(page).click();
+  await expect(page.getByText(/途中で止まりました/)).toBeVisible();
+  await backupSettled(page);
+  expect(calls.archive).toBe(1);
+  expect(calls.finish).toBe(0);
+  expect(await savedMeta(page)).toEqual(OLD_META);
+  await page.getByRole('button', { name: '閉じる' }).click();
+  await expect(page.locator('#banner')).toContainText('5日以上たっています');
+});
+
+for (const cancel of ['やめる', 'Escape']) {
+  test(`B03 cancelling archive confirmation preserves the backup date (${cancel})`, async ({
+    page,
+  }) => {
+    const calls = await relay(page, { archive: 'confirm' });
+    await openStaleNotice(page);
+    await headerNotion(page).click();
+    await startButton(page).click();
+    await expect(page.getByRole('button', { name: 'やめる' })).toBeVisible();
+    if (cancel === 'Escape') await page.keyboard.press('Escape');
+    else await page.getByRole('button', { name: 'やめる' }).click();
+    await backupSettled(page);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(calls.finish).toBe(0);
+    expect(await savedMeta(page)).toEqual(OLD_META);
+    await expect(page.locator('#banner')).toContainText('5日以上たっています');
+  });
+}
+
+for (const change of ['logout', 'viewer']) {
+  test(`B04 a late success after generation change preserves the backup date (${change})`, async ({
+    page,
+  }) => {
+    let release = (): void => undefined;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = await relay(page, { holdFinish: hold, lastBackupAt: NOTICE_NOW });
+    await openStaleNotice(page);
+    await headerNotion(page).click();
+    await startButton(page).click();
+    await expect.poll(() => calls.finish).toBe(1);
+    const hooked = await page.evaluate((signedIn) => {
+      const hook = (
+        window as unknown as {
+          __dajareTestAuth?: (next: { signedIn: boolean; editor: boolean }) => void;
+        }
+      ).__dajareTestAuth;
+      if (!hook) return false;
+      hook({ signedIn, editor: false });
+      return true;
+    }, change === 'viewer');
+    expect(hooked).toBe(true);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    release();
+    await backupSettled(page);
+    expect(await savedMeta(page)).toEqual(OLD_META);
+    if (change === 'logout') await expect(page.locator('#banner')).toBeHidden();
+    else await expect(page.locator('#banner')).toContainText('5日以上たっています');
+  });
+}
+
+test('B05 a success arriving after close preserves the backup date', async ({ page }) => {
+  let release = (): void => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls = await relay(page, { holdFinish: hold, lastBackupAt: NOTICE_NOW });
+  await openStaleNotice(page);
+  await headerNotion(page).click();
+  await startButton(page).click();
+  await expect.poll(() => calls.finish).toBe(1);
+  await page.getByRole('button', { name: '閉じる' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  release();
+  await backupSettled(page);
+  expect(await savedMeta(page)).toEqual(OLD_META);
+  await expect(page.locator('#banner')).toContainText('5日以上たっています');
+  expect(calls.finish).toBe(1);
+  await headerNotion(page).click();
+  await expect(page.getByText(/最終保管/)).toBeVisible();
 });
