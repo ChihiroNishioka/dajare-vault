@@ -1066,7 +1066,9 @@ for (const change of ['logout', 'viewer']) {
   });
 }
 
-test('B05 a success arriving after close preserves the backup date', async ({ page }) => {
+test('B05 a success arriving after close refreshes the backup date without resetting changes', async ({
+  page,
+}) => {
   let release = (): void => undefined;
   const hold = new Promise<void>((resolve) => {
     release = resolve;
@@ -1080,8 +1082,10 @@ test('B05 a success arriving after close preserves the backup date', async ({ pa
   await expect(page.getByRole('dialog')).toHaveCount(0);
   release();
   await backupSettled(page);
-  expect(await savedMeta(page)).toEqual(OLD_META);
-  await expect(page.locator('#banner')).toContainText('5日以上たっています');
+  expect(await savedMeta(page)).toEqual({ ...OLD_META, lastExportAt: '2026-11-08T03:34:56Z' });
+  await expect(page.locator('#banner')).toHaveText(
+    '最後にバックアップしたのは今日。未書き出しの変更が17件',
+  );
   expect(calls.finish).toBe(1);
   await headerNotion(page).click();
   await expect(page.getByText(/最終保管/)).toBeVisible();
